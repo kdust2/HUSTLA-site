@@ -1,0 +1,17 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "RC3ztWaBiXLxHik76XZsc"
+uri = "file://.local/conversation-workspace/files/HUSTLA-separated.zip"
+type = "unspecified"
+title = "HUSTLA website, polished and split into files"
+description = "Updated bundle with a refined, responsive visual style. Includes index.html, styles.css, app.js, three logo assets, and a short README. Keep the folder structure intact and open index.html."
+logical_id = "c685317a-4d37-41fa-890e-35dfb6e9c852"
+content_hash = "sha256:846160c1d332613e21fc01c6ffd27eb1026712faeaefae2c0cb93255487d70d9"
+size = 97808
+mtime_ms = 1794678137296
+storage_uri = "gcs://replit-rams-assets-kirk/rams/assets/conversation:4941cb10-e2a7-4d2c-bbb0-b8009d7e762a/c685317a-4d37-41fa-890e-35dfb6e9c852/06e8530a-84a9-48b5-9e41-e44746ac2f2b"
+storage_version_token = "1794678145273301"
+content_type = "application/octet-stream"
+source_uri = "file://HUSTLA-separated.zip"

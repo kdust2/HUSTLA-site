@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "HUSTLA Website Preview"
+description = "A temporary Replit preview of the polished HUSTLA marketplace website, preserving its original page interactions and visual branding."
+version = "1.0.0"
+id = "artifacts/hustla-site-preview"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24574
+
+[services.development]
+run = "pnpm --filter @workspace/hustla-site-preview run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/hustla-site-preview", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/hustla-site-preview/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24574"
+BASE_PATH = "/"
