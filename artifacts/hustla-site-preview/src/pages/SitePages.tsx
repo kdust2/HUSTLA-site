@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { useClerk, useUser } from '@clerk/react';
+import { useDemoAuth } from '@/lib/demoAuth';
 import {
   ArrowDownRight, ArrowRight, BadgeCheck, BriefcaseBusiness, Check, CircleHelp,
   Compass, CreditCard, Home, LogOut, Plus, Search, ShieldCheck, Sparkles, X, Zap,
@@ -101,9 +101,8 @@ const navItems = [
 function AppShell({ children, title }: { children: ReactNode; title: string }) {
   useScrollReveal();
   const [location] = useLocation();
-  const { signOut } = useClerk();
-  const { user } = useUser();
-  const name = user?.firstName || user?.username || 'HUSTLA member';
+  const { user, signOut } = useDemoAuth();
+  const name = user?.name || 'HUSTLA member';
   const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   return (
     <div className="shell">
@@ -126,7 +125,7 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
           <span className="crumb">Workspace <span aria-hidden="true">/</span> {title}</span>
           <div className="top-actions">
             <span className="welcome">Good work starts here, {name.split(' ')[0]}.</span>
-            <button className="btn btn-small" data-testid="button-sign-out" onClick={() => void signOut({ redirectUrl: import.meta.env.BASE_URL || '/' })}><LogOut size={14} /> Sign out</button>
+            <button className="btn btn-small" data-testid="button-sign-out" onClick={() => signOut()}><LogOut size={14} /> Sign out</button>
           </div>
         </header>
         <main className="content">{children}</main>

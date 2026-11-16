@@ -1,137 +1,83 @@
-import { type ReactNode } from 'react';
-import { ClerkProvider, SignIn, SignUp, useAuth } from '@clerk/react';
-import { publishableKeyFromHost } from '@clerk/react/internal';
-import { shadcn } from '@clerk/themes';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { Route, Switch, Redirect, Router as WouterRouter, useLocation, Link } from 'wouter';
 import { HomePage, ProductPage, DashboardPage, ExplorePage } from '@/pages/SitePages';
+import { DemoAuthProvider, useDemoAuth } from '@/lib/demoAuth';
 
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || '/'
-    : path;
-}
-
-const clerkAppearance = {
-  theme: shadcn,
-  cssLayerName: 'clerk',
-  options: {
-    logoPlacement: 'inside' as const,
-    logoLinkUrl: basePath || '/',
-    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
-    socialButtonsPlacement: 'bottom' as const,
-    socialButtonsVariant: 'blockButton' as const,
-  },
-  variables: {
-    colorPrimary: '#2455d6',
-    colorForeground: '#1d293c',
-    colorMutedForeground: '#697689',
-    colorDanger: '#c84d40',
-    colorBackground: '#fffefa',
-    colorInput: '#fffefa',
-    colorInputForeground: '#1d293c',
-    colorNeutral: '#1d293c',
-    fontFamily: "'DM Sans', sans-serif",
-    borderRadius: '1rem',
-  },
-  elements: {
-    rootBox: 'w-full flex justify-center',
-    cardBox: 'bg-[#fffefa] rounded-2xl w-[440px] max-w-full overflow-hidden shadow-xl',
-    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    headerTitle: 'font-bold text-[#1d293c]',
-    headerSubtitle: 'text-[#697689]',
-    socialButtonsBlockButtonText: 'font-semibold text-[#1d293c]',
-    formFieldLabel: 'font-semibold text-[#1d293c]',
-    footerActionLink: 'font-semibold text-[#2455d6]',
-    footerActionText: 'text-[#697689]',
-    dividerText: 'text-[#697689]',
-    identityPreviewEditButton: 'text-[#2455d6]',
-    formFieldSuccessText: 'text-[#317b5c]',
-    alertText: 'text-[#9f3429]',
-    logoBox: 'rounded-xl',
-    logoImage: 'h-9',
-    socialButtonsBlockButton: 'rounded-xl border-[#dedbd2]',
-    formButtonPrimary: 'rounded-full font-bold !text-white',
-    formFieldInput: 'rounded-xl border-[#dedbd2]',
-    footerAction: 'text-[#697689]',
-    dividerLine: 'bg-[#dedbd2]',
-    alert: 'rounded-xl',
-    otpCodeFieldInput: 'rounded-xl',
-    formFieldRow: 'text-left',
-    main: 'gap-4',
-  },
-};
-
 function Protected({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn } = useAuth();
-  if (!isLoaded) return <div className="auth-wrap"><div className="auth-caption">Getting your HUSTLA space ready…</div></div>;
+  const { isSignedIn } = useDemoAuth();
   return isSignedIn ? <>{children}</> : <Redirect to="/sign-in" />;
 }
 
 function HomeRedirect() {
-  const { isLoaded, isSignedIn } = useAuth();
-  if (isLoaded && isSignedIn) return <Redirect to="/dashboard" />;
+  const { isSignedIn } = useDemoAuth();
+  if (isSignedIn) return <Redirect to="/dashboard" />;
   return <HomePage />;
 }
 
 function AuthScreen({ mode }: { mode: 'in' | 'up' }) {
+  const { signIn } = useDemoAuth();
+  const [, setLocation] = useLocation();
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    signIn(name || email.split('@')[0] || 'Demo User', email);
+    setLocation('/dashboard');
+  };
+
   return (
     <main className="auth-wrap">
       <div className="auth-panel">
         <Link className="brand" href="/" data-testid="link-auth-brand"><img src={`${basePath}/assets/hustla-mark.png`} alt="" /> HUSTLA</Link>
         <p className="auth-caption">Discover. Hustle. Earn.</p>
-        {mode === 'in' ? (
-          <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} />
-        ) : (
-          <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} />
-        )}
+        <form onSubmit={submit} style={{ background: '#fffefa', borderRadius: 16, padding: 24, textAlign: 'left', boxShadow: '0 12px 40px #22314d1f' }}>
+          <h1 className="display" style={{ fontSize: 28, margin: '0 0 4px' }}>{mode === 'in' ? 'Welcome back' : 'Make your next move'}</h1>
+          <p className="auth-caption" style={{ marginTop: 0 }}>Demo mode: type any name and email to look around. No real account is created.</p>
+          <label htmlFor="demo-name" style={{ display: 'block', fontSize: 12, fontWeight: 700, margin: '12px 0 5px' }}>Your name</label>
+          <input id="demo-name" className="field" data-testid="input-demo-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ama Mensah" />
+          <label htmlFor="demo-email" style={{ display: 'block', fontSize: 12, fontWeight: 700, margin: '12px 0 5px' }}>Email</label>
+          <input id="demo-email" className="field" data-testid="input-demo-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          <button type="submit" className="btn btn-primary" data-testid="button-demo-continue" style={{ width: '100%', marginTop: 18 }}>{mode === 'in' ? 'Sign in' : 'Create account'}</button>
+          <p className="auth-caption" style={{ textAlign: 'center', marginBottom: 0 }}>
+            {mode === 'in'
+              ? <>New here? <Link href="/sign-up" data-testid="link-to-sign-up">Create an account</Link></>
+              : <>Already have an account? <Link href="/sign-in" data-testid="link-to-sign-in">Sign in</Link></>}
+          </p>
+        </form>
       </div>
     </main>
   );
 }
 
-function ClerkRoutes() {
-  const [, setLocation] = useLocation();
+function AppRoutes() {
   return (
-    <ClerkProvider
-      publishableKey={clerkPubKey}
-      proxyUrl={clerkProxyUrl}
-      appearance={clerkAppearance}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      localization={{
-        signIn: { start: { title: 'Welcome back', subtitle: 'Sign in and get moving.' } },
-        signUp: { start: { title: 'Make your next move', subtitle: 'One account. Two ways to earn.' } },
-      }}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      <Switch>
-        <Route path="/" component={HomeRedirect} />
-        <Route path="/sign-in/*?" component={() => <AuthScreen mode="in" />} />
-        <Route path="/sign-up/*?" component={() => <AuthScreen mode="up" />} />
-        <Route path="/dashboard">{() => <Protected><DashboardPage /></Protected>}</Route>
-        <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
-        <Route path="/businesses">{() => <Protected><ProductPage page="businesses" /></Protected>}</Route>
-        <Route path="/creators">{() => <Protected><ProductPage page="creators" /></Protected>}</Route>
-        <Route path="/how-it-works">{() => <Protected><ProductPage page="how-it-works" /></Protected>}</Route>
-        <Route path="/pricing">{() => <Protected><ProductPage page="pricing" /></Protected>}</Route>
-        <Route path="/help">{() => <Protected><ProductPage page="help" /></Protected>}</Route>
-        <Route><div className="auth-wrap"><div className="auth-panel"><h1 className="display">Page not found</h1><a className="btn btn-primary" href={basePath || '/'} data-testid="link-home-fallback">Back to HUSTLA</a></div></div></Route>
-      </Switch>
-    </ClerkProvider>
+    <Switch>
+      <Route path="/" component={HomeRedirect} />
+      <Route path="/sign-in/*?" component={() => <AuthScreen mode="in" />} />
+      <Route path="/sign-up/*?" component={() => <AuthScreen mode="up" />} />
+      <Route path="/dashboard">{() => <Protected><DashboardPage /></Protected>}</Route>
+      <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
+      <Route path="/businesses">{() => <Protected><ProductPage page="businesses" /></Protected>}</Route>
+      <Route path="/creators">{() => <Protected><ProductPage page="creators" /></Protected>}</Route>
+      <Route path="/how-it-works">{() => <Protected><ProductPage page="how-it-works" /></Protected>}</Route>
+      <Route path="/pricing">{() => <Protected><ProductPage page="pricing" /></Protected>}</Route>
+      <Route path="/help">{() => <Protected><ProductPage page="help" /></Protected>}</Route>
+      <Route><div className="auth-wrap"><div className="auth-panel"><h1 className="display">Page not found</h1><a className="btn btn-primary" href={basePath || '/'} data-testid="link-home-fallback">Back to HUSTLA</a></div></div></Route>
+    </Switch>
   );
 }
 
 function App() {
-  return <WouterRouter base={basePath}><ClerkRoutes /></WouterRouter>;
+  return (
+    <WouterRouter base={basePath}>
+      <DemoAuthProvider>
+        <AppRoutes />
+      </DemoAuthProvider>
+    </WouterRouter>
+  );
 }
 
 export default App;
