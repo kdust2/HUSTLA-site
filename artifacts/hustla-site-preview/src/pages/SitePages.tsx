@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useDemoAuth } from '@/lib/demoAuth';
 import {
@@ -34,9 +34,9 @@ function useScrollReveal() {
   const [location] = useLocation();
   useEffect(() => {
     window.scrollTo(0, 0);
-    const nodes = document.querySelectorAll<HTMLElement>('.reveal:not(.is-visible)');
+    const showAll = () => document.querySelectorAll<HTMLElement>('.reveal:not(.is-visible)').forEach((node) => node.classList.add('is-visible'));
     if (!('IntersectionObserver' in window) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      nodes.forEach((node) => node.classList.add('is-visible'));
+      showAll();
       return;
     }
     const observer = new IntersectionObserver((entries) => {
@@ -46,14 +46,51 @@ function useScrollReveal() {
           observer.unobserve(entry.target);
         }
       });
-    }, { threshold: 0.12 });
-    nodes.forEach((node) => observer.observe(node));
-    return () => observer.disconnect();
+    }, { threshold: 0, rootMargin: '0px 0px -6% 0px' });
+    const watch = () => document.querySelectorAll<HTMLElement>('.reveal:not(.is-visible)').forEach((node) => observer.observe(node));
+    watch();
+    const mutations = new MutationObserver(watch);
+    mutations.observe(document.body, { childList: true, subtree: true });
+    return () => { observer.disconnect(); mutations.disconnect(); };
   }, [location]);
+}
+
+const delay = (ms: number) => ({ '--d': `${ms}ms` }) as CSSProperties;
+
+function CountUp({ to, suffix = '' }: { to: number; suffix?: string }) {
+  const [value, setValue] = useState(0);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (!('IntersectionObserver' in window) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setValue(to);
+      return;
+    }
+    const io = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      io.disconnect();
+      const start = performance.now();
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / 1300);
+        setValue(Math.round(to * (1 - Math.pow(1 - t, 3))));
+        if (t < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, { threshold: 0.4 });
+    io.observe(node);
+    return () => io.disconnect();
+  }, [to]);
+  return <span ref={ref}>{value}{suffix}</span>;
 }
 
 export function HomePage() {
   useScrollReveal();
+  const steps = [
+    ['1', 'Pick or post', 'Browse reviewed tasks, or post a brief and a budget.'],
+    ['2', 'Do the work', 'Deliver it, with one correction round if needed.'],
+    ['3', 'Get paid', 'Approved work is paid in cedis every Tuesday and Friday.'],
+  ];
   return (
     <div className="site home">
       <header className="public-header">
@@ -65,16 +102,19 @@ export function HomePage() {
       </header>
       <main className="home-hero">
         <div className="hero-copy">
-          <p className="eyebrow">The Ghana work marketplace</p>
-          <h1>Make your next move <em>count.</em></h1>
-          <p className="home-lead">HUSTLA connects Ghanaian businesses and creators with people ready to make, promote and get things done — paid in cedis.</p>
-          <div className="public-actions">
+          <p className="eyebrow rise" style={delay(0)}>The Ghana work marketplace</p>
+          <h1 className="rise" style={delay(120)}>Make your next move <em>count.</em></h1>
+          <p className="home-lead rise" style={delay(240)}>HUSTLA connects Ghanaian businesses and creators with people ready to make, promote and get things done, paid in cedis.</p>
+          <div className="public-actions rise" style={delay(360)}>
             <Link className="btn btn-primary" href="/sign-up" data-testid="link-hero-sign-up">Create your account <ArrowRight size={16} /></Link>
             <Link className="btn" href="/sign-in" data-testid="link-hero-sign-in">Sign in</Link>
           </div>
-          <p className="home-footnote">One account for campaign publishers and task workers.</p>
+          <p className="home-footnote rise" style={delay(480)}>One account for campaign publishers and task workers.</p>
         </div>
-        <div className="hero-art" aria-label="HUSTLA marketplace illustration">
+        <div className="hero-art rise" style={delay(200)} aria-label="HUSTLA marketplace illustration">
+          <span className="ring" aria-hidden="true" />
+          <span className="blob blob-a" aria-hidden="true" />
+          <span className="blob blob-b" aria-hidden="true" />
           <div className="orbit-card">
             <img src={`${import.meta.env.BASE_URL}assets/hustla-mark.png`} alt="" />
             <span className="mini-label">Discover · Hustle · Earn</span>
@@ -85,6 +125,23 @@ export function HomePage() {
           <div className="float-pill float-two"><BadgeCheck size={16} /> Approved work only</div>
         </div>
       </main>
+      <section className="ticker" aria-label="Task categories"><div className="ticker-track">{[...categories, ...categories].map((item, index) => <span key={index}>{item}</span>)}</div></section>
+      <section className="home-section">
+        <p className="eyebrow reveal">How it works</p>
+        <h2 className="reveal" style={delay(80)}>Three steps from idea to cedis.</h2>
+        <div className="steps-grid">{steps.map(([number, title, copy], index) => <div className="step-card reveal" style={delay(index * 120)} key={number}><span className="step-num">{number}</span><h3>{title}</h3><p>{copy}</p></div>)}</div>
+      </section>
+      <section className="home-section">
+        <div className="stats-row reveal">
+          <div><strong><CountUp to={12} /></strong><span>task categories</span></div>
+          <div><strong><CountUp to={24} suffix="h" /></strong><span>campaign review</span></div>
+          <div><strong><CountUp to={2} /></strong><span>payout days a week</span></div>
+          <div><strong><CountUp to={100} suffix="%" /></strong><span>of the reward goes to the worker</span></div>
+        </div>
+      </section>
+      <section className="home-section cta-wrap">
+        <div className="cta-band reveal"><h2>Ready to make a move?</h2><Link className="btn btn-warm" href="/sign-up" data-testid="link-cta-sign-up">Create your account <ArrowRight size={16} /></Link></div>
+      </section>
       <footer className="public-footer"><Brand /><span>Built around real work in Ghana. All times are Ghana time (GMT).</span></footer>
     </div>
   );
@@ -159,7 +216,7 @@ function Header({ eyebrow, title, description, action }: { eyebrow: string; titl
 
 function TaskCard({ task, action }: { task: Task; action?: React.ReactNode }) {
   return (
-    <article className="task-card">
+    <article className="task-card reveal">
       <div>
         <span className="category">{task.category}</span>
         <h3>{task.title}</h3>
@@ -246,7 +303,7 @@ export function DashboardPage() {
           ['Reserved', 'GH₵264.00', 'Held for live tasks'],
           ['Active campaigns', '02', '5 workers in progress'],
           ['Awaiting review', '01', 'Respond within 48 hours'],
-        ]).map(([label, value, sub]) => <div key={label} className="stat-card"><span>{label}</span><strong>{value}</strong><small>{sub}</small></div>)}
+        ]).map(([label, value, sub]) => <div key={label} className="stat-card reveal"><span>{label}</span><strong>{value}</strong><small>{sub}</small></div>)}
       </div>
       <div className="dash-grid">
         <section className="surface">
