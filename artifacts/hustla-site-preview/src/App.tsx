@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Route, Switch, Redirect, Router as WouterRouter, useLocation, Link } from 'wouter';
-import { HomePage, ProductPage, DashboardPage, ExplorePage } from '@/pages/SitePages';
+import { HomePage, ProductPage, DashboardPage, ExplorePage, NewCampaignPage } from '@/pages/SitePages';
 import { DemoAuthProvider, useDemoAuth } from '@/lib/demoAuth';
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -59,6 +59,7 @@ function AppRoutes() {
       <Route path="/sign-in/*?" component={() => <AuthScreen mode="in" />} />
       <Route path="/sign-up/*?" component={() => <AuthScreen mode="up" />} />
       <Route path="/dashboard">{() => <Protected><DashboardPage /></Protected>}</Route>
+      <Route path="/new-campaign">{() => <Protected><NewCampaignPage /></Protected>}</Route>
       <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
       <Route path="/businesses">{() => <Protected><ProductPage page="businesses" /></Protected>}</Route>
       <Route path="/creators">{() => <Protected><ProductPage page="creators" /></Protected>}</Route>

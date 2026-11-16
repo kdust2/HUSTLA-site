@@ -236,3 +236,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
  *,*::before,*::after { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }
  .reveal { opacity:1; transform:none; }
 }
+.form-page { max-width:720px; }
+.campaign-form { padding:24px; }
+.campaign-form label { display:block; font-size:12px; font-weight:700; margin:16px 0 6px; }
+.campaign-form textarea { padding-top:10px; min-height:120px; resize:vertical; }
+.campaign-form .fee-calculator { margin-top:20px; }
+.form-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+@media (max-width:700px) { .campaign-form { padding:18px; } .form-actions .btn { flex:1; } }

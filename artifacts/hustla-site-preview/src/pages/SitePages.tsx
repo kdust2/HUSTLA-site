@@ -198,37 +198,43 @@ export function ExplorePage() {
 
 type Campaign = { id: number; title: string; category: string; status: string; quantity: number; reward: number };
 
+const CAMPAIGN_KEY = 'hustla-demo-campaigns';
+const FLASH_KEY = 'hustla-flash';
+function loadSavedCampaigns(): Campaign[] {
+  try {
+    const raw = window.localStorage.getItem(CAMPAIGN_KEY);
+    return raw ? (JSON.parse(raw) as Campaign[]) : [];
+  } catch {
+    return [];
+  }
+}
+function saveCampaign(campaign: Campaign) {
+  try { window.localStorage.setItem(CAMPAIGN_KEY, JSON.stringify([campaign, ...loadSavedCampaigns()])); } catch { /* storage can be unavailable */ }
+}
+
 export function DashboardPage() {
-  const [mode, setMode] = useState<'worker' | 'publisher'>('worker');
-  const [campaigns, setCampaigns] = useState<Campaign[]>([
+  const [mode, setMode] = useState<'worker' | 'publisher'>(() => (window.location.hash === '#publisher' ? 'publisher' : 'worker'));
+  const [campaigns] = useState<Campaign[]>(() => [
+    ...loadSavedCampaigns(),
     { id: 1, title: 'Unboxing video for a Kumasi shea butter brand', category: categories[3], status: 'Live', quantity: 3, reward: 40 },
     { id: 2, title: 'Usability test of a school fees portal', category: categories[6], status: 'Live', quantity: 2, reward: 60 },
     { id: 3, title: 'Buy followers for my music page', category: categories[1], status: 'Needs review', quantity: 5, reward: 10 },
   ]);
   const [applied, setApplied] = useState<number[]>([2]);
-  const [modal, setModal] = useState(false);
   const [toast, setToast] = useState('');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState(categories[3]);
-  const [quantity, setQuantity] = useState(3);
-  const [reward, setReward] = useState(40);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2800); };
 
-  const createCampaign = (event: FormEvent) => {
-    event.preventDefault();
-    if (title.trim().length < 8 || description.trim().length < 10 || quantity < 1 || reward < 1) {
-      notify('Add a clear title, brief, quantity and reward to continue.');
-      return;
-    }
-    setCampaigns((prev) => [{ id: Date.now(), title: title.trim(), category, status: 'Pending review', quantity, reward }, ...prev]);
-    setTitle(''); setDescription(''); setModal(false); notify('Submitted. HUSTLA reviews new campaigns within 24 hours.');
-  };
+  useEffect(() => {
+    try {
+      const flash = window.sessionStorage.getItem(FLASH_KEY);
+      if (flash) { window.sessionStorage.removeItem(FLASH_KEY); notify(flash); }
+    } catch { /* storage can be unavailable */ }
+  }, []);
 
   const workerTasks = initialTasks.filter((task) => task.id !== 2);
   return (
     <AppShell title="Dashboard">
-      <Header eyebrow="Your HUSTLA" title="Good work, in motion." description="A quick look at the work you’re publishing, the tasks you’re taking on and your cedi balance." action={<button className="btn btn-primary" data-testid="button-new-campaign" onClick={() => { setMode('publisher'); setModal(true); }}><Plus size={16} /> New campaign</button>} />
+      <Header eyebrow="Your HUSTLA" title="Good work, in motion." description="A quick look at the work you’re publishing, the tasks you’re taking on and your cedi balance." action={<Link className="btn btn-primary" href="/new-campaign" data-testid="button-new-campaign"><Plus size={16} /> New campaign</Link>} />
       <div className="stats-grid">
         {(mode === 'worker' ? [
           ['Withdrawable', 'GH₵186.00', 'Next payout · Friday'],
@@ -257,14 +263,58 @@ export function DashboardPage() {
           </div></section>
         </aside>
       </div>
-      {modal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(false); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="campaign-title"><div className="modal-head"><h2 id="campaign-title">Start a campaign</h2><button className="icon-btn" aria-label="Close" data-testid="button-close-campaign" onClick={() => setModal(false)}><X /></button></div><p className="auth-caption">Tell workers exactly what to make. New campaigns are reviewed within 24 hours.</p><form onSubmit={createCampaign}>
-        <label htmlFor="campaign-name">Campaign title</label><input id="campaign-name" className="field" data-testid="input-campaign-name" value={title} onChange={(event) => setTitle(event.target.value)} minLength={8} required placeholder="e.g. Create a product demo reel" />
-        <label htmlFor="campaign-category">Category</label><select id="campaign-category" className="field" data-testid="select-campaign-category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select>
-        <label htmlFor="campaign-brief">What should the worker deliver?</label><textarea id="campaign-brief" className="field" data-testid="textarea-campaign-brief" value={description} onChange={(event) => setDescription(event.target.value)} minLength={10} required placeholder="Describe the deliverable, requirements and acceptance criteria." />
-        <div className="calc-row"><div><label htmlFor="campaign-quantity">Number of tasks</label><input id="campaign-quantity" className="field" data-testid="input-campaign-quantity" type="number" min="1" max="100" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div><div><label htmlFor="campaign-reward">Reward per task (GH₵)</label><input id="campaign-reward" className="field" data-testid="input-campaign-reward" type="number" min="1" step=".5" value={reward} onChange={(event) => setReward(Number(event.target.value))} /></div></div>
-        <p className="auth-caption">HUSTLA adds a transparent 10% publisher fee. The worker receives the full reward shown.</p><div className="modal-actions"><button type="button" className="btn" data-testid="button-cancel-campaign" onClick={() => setModal(false)}>Cancel</button><button type="submit" className="btn btn-primary" data-testid="button-submit-campaign">Submit for review</button></div>
-      </form></section></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
+    </AppShell>
+  );
+}
+
+export function NewCampaignPage() {
+  const [, setLocation] = useLocation();
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState(categories[3]);
+  const [quantity, setQuantity] = useState(3);
+  const [reward, setReward] = useState(40);
+  const [error, setError] = useState('');
+  const rewardTotal = quantity * reward;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (title.trim().length < 8 || description.trim().length < 10 || quantity < 1 || reward < 1) {
+      setError('Add a clear title, brief, quantity and reward to continue.');
+      return;
+    }
+    saveCampaign({ id: Date.now(), title: title.trim(), category, status: 'Pending review', quantity, reward });
+    try { window.sessionStorage.setItem(FLASH_KEY, 'Submitted. HUSTLA reviews new campaigns within 24 hours.'); } catch { /* storage can be unavailable */ }
+    setLocation('/dashboard#publisher');
+  };
+
+  return (
+    <AppShell title="New campaign">
+      <Header eyebrow="Publisher" title="Start a campaign." description="Tell workers exactly what to make. New campaigns are reviewed within 24 hours." action={<Link className="btn" href="/dashboard" data-testid="link-cancel-campaign">Back to dashboard</Link>} />
+      <form className="surface campaign-form form-page" onSubmit={submit}>
+        <label htmlFor="campaign-name">Campaign title</label>
+        <input id="campaign-name" className="field" data-testid="input-campaign-name" value={title} onChange={(event) => setTitle(event.target.value)} minLength={8} required placeholder="e.g. Create a product demo reel" />
+        <label htmlFor="campaign-category">Category</label>
+        <select id="campaign-category" className="field" data-testid="select-campaign-category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select>
+        <label htmlFor="campaign-brief">What should the worker deliver?</label>
+        <textarea id="campaign-brief" className="field" data-testid="textarea-campaign-brief" value={description} onChange={(event) => setDescription(event.target.value)} minLength={10} required placeholder="Describe the deliverable, requirements and acceptance criteria." />
+        <div className="calc-row">
+          <div><label htmlFor="campaign-quantity">Number of tasks</label><input id="campaign-quantity" className="field" data-testid="input-campaign-quantity" type="number" min="1" max="100" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
+          <div><label htmlFor="campaign-reward">Reward per task (GH₵)</label><input id="campaign-reward" className="field" data-testid="input-campaign-reward" type="number" min="1" step=".5" value={reward} onChange={(event) => setReward(Number(event.target.value))} /></div>
+        </div>
+        <div className="fee-calculator">
+          <div className="calc-result"><span>Workers receive</span><strong>{gh(rewardTotal)}</strong></div>
+          <div className="calc-result"><span>HUSTLA fee (10%)</span><strong>{gh(rewardTotal * 0.1)}</strong></div>
+          <div className="calc-result"><b>Total to fund</b><strong>{gh(rewardTotal * 1.1)}</strong></div>
+        </div>
+        <p className="auth-caption">The worker always receives the full reward shown. The 10% fee is added on top.</p>
+        {error && <div className="notice" role="alert">{error}</div>}
+        <div className="form-actions">
+          <Link className="btn" href="/dashboard" data-testid="button-cancel-campaign">Cancel</Link>
+          <button type="submit" className="btn btn-primary" data-testid="button-submit-campaign">Submit for review</button>
+        </div>
+      </form>
     </AppShell>
   );
 }
@@ -298,8 +348,6 @@ export function ProductPage({ page }: { page: 'businesses' | 'creators' | 'how-i
   useScrollReveal();
   const [quantity, setQuantity] = useState(5);
   const [reward, setReward] = useState(100);
-  const [toast, setToast] = useState('');
-  const showToast = (text: string) => { setToast(text); window.setTimeout(() => setToast(''), 2600); };
   const titles = {
     businesses: ['FOR BUSINESSES', 'Find your people. Make good work.', 'UGC, demos, graphics, testing and research — delivered by real people, with your budget held until approval.'],
     creators: ['FOR CREATORS', 'Promote your work. Earn from others.', 'Musicians, creators and freelancers can run campaigns for their own work and complete tasks for others — from one account.'],
@@ -312,7 +360,7 @@ export function ProductPage({ page }: { page: 'businesses' | 'creators' | 'how-i
     <AppShell title={page === 'how-it-works' ? 'How it works' : page[0].toUpperCase() + page.slice(1)}>
       <Header eyebrow={eyebrow} title={heading} description={desc} />
       {page === 'businesses' && <>
-        <section className="business-hero reveal"><h2>Campaigns that pay for actual work.</h2><p>Choose who applies, review every deliverable and keep your brief and budget in control at each step.</p><button className="btn btn-warm" data-testid="button-publish-campaign-info" onClick={() => showToast('Open your dashboard to start a campaign.')}>Publish a campaign <ArrowRight size={15} /></button></section>
+        <section className="business-hero reveal"><h2>Campaigns that pay for actual work.</h2><p>Choose who applies, review every deliverable and keep your brief and budget in control at each step.</p><Link className="btn btn-warm" href="/new-campaign" data-testid="button-publish-campaign-info">Publish a campaign <ArrowRight size={15} /></Link></section>
         <section className="sec reveal"><h2 className="display">What can you put to work?</h2><p className="auth-caption">Twelve campaign categories, from the first product impression to the final edit.</p><div className="simple-grid">{[['You stay in control', 'Choose applicants, approve the work or request one correction with a clear reason. Scope and reward lock when a worker is accepted.'], ['Your money stays accounted for', 'Budget is reserved before tasks go live. It is released only on approval or a dispute decision. Unused balance stays in your wallet.']].map(([title, copy]) => <div className="info-panel" key={title}><ShieldCheck color="#2455d6" /><h3>{title}</h3><p>{copy}</p></div>)}</div></section>
         <section className="sec reveal"><h2 className="display">From brief to approved work</h2><NumberedSteps items={businessSteps} /><CampaignIntegrity /></section>
       </>}
@@ -327,7 +375,6 @@ export function ProductPage({ page }: { page: 'businesses' | 'creators' | 'how-i
         <section className="sec reveal"><h2 className="display">Deposits and withdrawals</h2><div className="simple-grid">{[['Minimum campaign deposit','GH₵50'],['Minimum withdrawal','GH₵20'],['Payout days','Tuesday and Friday'],['Membership billing','Monthly only']].map(([label, amount]) => <div className="info-panel" key={label}><span className="auth-caption">{label}</span><h3>{amount}</h3></div>)}</div><p className="auth-caption">Any payment-provider charge is shown before you confirm, and never reduces a worker’s agreed reward.</p></section>
       </>}
         {page === 'help' && <><div className="faq-list reveal">{faqs.map(([question, answer], index) => <details key={question}><summary data-testid={`summary-help-${index}`}>{question}</summary><p>{answer}</p></details>)}</div><div className="notice reveal"><strong>Still stuck?</strong> Open a support request from your dashboard, or use the report action on any campaign. <Link href="/dashboard" data-testid="link-help-dashboard">Go to dashboard <ArrowRight size={13} /></Link></div></>}
-      {toast && <div className="toast" role="status">{toast}</div>}
     </AppShell>
   );
 }
