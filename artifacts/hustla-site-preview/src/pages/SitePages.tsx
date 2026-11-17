@@ -204,7 +204,7 @@ function AppShell({ children, title }: { children: ReactNode; title: string }) {
             <div className="avatar" aria-hidden="true">{initials}</div>
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className="content page-in" key={location}>{children}</main>
       </div>
     </div>
   );
@@ -230,25 +230,50 @@ function TaskCard({ task, action }: { task: Task; action?: React.ReactNode }) {
 
 export function ExplorePage() {
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('');
-  const [sort, setSort] = useState('reward');
+  const [category, setCategory] = useState('All');
   const [applied, setApplied] = useState<number[]>([]);
+  const [toast, setToast] = useState('');
   const tasks = useMemo(() => initialTasks.filter((task) =>
-    (!category || task.category === category) &&
+    (category === 'All' || task.category === category) &&
     `${task.title} ${task.description} ${task.category}`.toLowerCase().includes(search.toLowerCase()),
-  ).sort((a, b) => sort === 'deadline' ? a.days - b.days : b.reward - a.reward), [search, category, sort]);
+  ), [search, category]);
+  const toggle = (id: number) => {
+    const adding = !applied.includes(id);
+    setApplied((prev) => (adding ? [...prev, id] : prev.filter((item) => item !== id)));
+    if (adding) {
+      setToast('Application sent. The publisher has 24 hours to respond.');
+      window.setTimeout(() => setToast(''), 2600);
+    }
+  };
   return (
     <AppShell title="Explore">
       <Header eyebrow="Open opportunities" title="Find work that fits." description="Every campaign is reviewed and funded before it appears. Rewards shown are what the worker receives." />
-      <div className="filter-row">
-        <label className="sr-only" htmlFor="task-search">Search tasks</label><input id="task-search" className="field" data-testid="input-task-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search video, logo, survey…" />
-        <label className="sr-only" htmlFor="task-category">Category</label><select id="task-category" className="field" data-testid="select-task-category" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((item) => <option key={item}>{item}</option>)}</select>
-        <label className="sr-only" htmlFor="task-sort">Sort tasks</label><select id="task-sort" className="field" data-testid="select-task-sort" value={sort} onChange={(event) => setSort(event.target.value)}><option value="reward">Highest reward</option><option value="deadline">Soonest deadline</option></select>
+      <label className="sr-only" htmlFor="task-search">Search tasks</label>
+      <input id="task-search" className="field explore-search" data-testid="input-task-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search video, logo, survey…" />
+      <div className="chips" role="group" aria-label="Categories">
+        {['All', ...categories.filter((name) => initialTasks.some((task) => task.category === name))].map((item) => (
+          <button key={item} type="button" className={`chip ${category === item ? 'on' : ''}`} aria-pressed={category === item} data-testid={`chip-${item.toLowerCase().replace(/[^a-z]+/g, '-')}`} onClick={() => setCategory(item)}>{item}</button>
+        ))}
       </div>
-      <div className="task-list">
-        {tasks.map((task) => <TaskCard key={task.id} task={task} action={<button className={`btn btn-small ${applied.includes(task.id) ? '' : 'btn-primary'}`} data-testid={`button-apply-task-${task.id}`} onClick={() => setApplied((prev) => prev.includes(task.id) ? prev : [...prev, task.id])}>{applied.includes(task.id) ? <><Check size={14} /> Applied</> : 'Apply'}</button>} />)}
-        {tasks.length === 0 && <div className="empty-state"><Search size={26} /><h2>No matches yet</h2><p>Try another phrase or clear the category filter.</p><button className="btn" data-testid="button-clear-task-filters" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button></div>}
-      </div>
+      {tasks.length > 0 ? (
+        <section className="surface" key={category}>
+          {tasks.map((task, index) => (
+            <div className="task-row pop" style={delay(index * 55)} key={task.id}>
+              <div className="task-info">
+                <span className="category">{task.category}</span>
+                <h3>{task.title}</h3>
+                <p>{task.days} days left · {task.spots} spots · {task.description}</p>
+              </div>
+              <div className="reward">{gh(task.reward)}<small>worker receives</small>
+                <button type="button" className={`btn btn-small ${applied.includes(task.id) ? '' : 'btn-primary'}`} data-testid={`button-apply-task-${task.id}`} onClick={() => toggle(task.id)}>{applied.includes(task.id) ? <><Check size={14} /> Applied</> : 'Apply'}</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      ) : (
+        <div className="empty-state pop"><Search size={26} /><h2>No matches yet</h2><p>Try another word or pick All.</p><button type="button" className="btn" data-testid="button-clear-task-filters" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</button></div>
+      )}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </AppShell>
   );
 }
@@ -327,6 +352,7 @@ export function DashboardPage() {
 
 export function NewCampaignPage() {
   const [, setLocation] = useLocation();
+  const [step, setStep] = useState(1);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState(categories[3]);
@@ -335,41 +361,70 @@ export function NewCampaignPage() {
   const [error, setError] = useState('');
   const rewardTotal = quantity * reward;
 
+  const go = (next: number) => { setError(''); setStep(next); };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (title.trim().length < 8 || description.trim().length < 10 || quantity < 1 || reward < 1) {
-      setError('Add a clear title, brief, quantity and reward to continue.');
+    if (step === 1 && (title.trim().length < 8 || description.trim().length < 10)) {
+      setError('Add a clear title (at least 8 letters) and a short brief to continue.');
       return;
     }
+    if (step === 2 && (quantity < 1 || reward < 1)) {
+      setError('Tasks and reward must each be at least 1.');
+      return;
+    }
+    if (step < 3) { go(step + 1); return; }
     saveCampaign({ id: Date.now(), title: title.trim(), category, status: 'Pending review', quantity, reward });
     try { window.sessionStorage.setItem(FLASH_KEY, 'Submitted. HUSTLA reviews new campaigns within 24 hours.'); } catch { /* storage can be unavailable */ }
     setLocation('/dashboard#publisher');
   };
 
+  const summary = (
+    <div className="fee-calculator">
+      <div className="calc-result"><span>Workers receive</span><strong>{gh(rewardTotal)}</strong></div>
+      <div className="calc-result"><span>HUSTLA fee (10%)</span><strong>{gh(rewardTotal * 0.1)}</strong></div>
+      <div className="calc-result"><b>Total to fund</b><strong>{gh(rewardTotal * 1.1)}</strong></div>
+    </div>
+  );
+
   return (
     <AppShell title="New campaign">
       <Header eyebrow="Publisher" title="Start a campaign." description="Tell workers exactly what to make. New campaigns are reviewed within 24 hours." action={<Link className="btn" href="/dashboard" data-testid="link-cancel-campaign">Back to dashboard</Link>} />
+      <ol className="steps" aria-label="Progress">
+        {['Brief', 'Budget', 'Review'].map((label, index) => (
+          <li key={label} className={step === index + 1 ? 'on' : step > index + 1 ? 'done' : ''} aria-current={step === index + 1 ? 'step' : undefined}>{index + 1} {label}</li>
+        ))}
+      </ol>
       <form className="surface campaign-form form-page" onSubmit={submit}>
-        <label htmlFor="campaign-name">Campaign title</label>
-        <input id="campaign-name" className="field" data-testid="input-campaign-name" value={title} onChange={(event) => setTitle(event.target.value)} minLength={8} required placeholder="e.g. Create a product demo reel" />
-        <label htmlFor="campaign-category">Category</label>
-        <select id="campaign-category" className="field" data-testid="select-campaign-category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select>
-        <label htmlFor="campaign-brief">What should the worker deliver?</label>
-        <textarea id="campaign-brief" className="field" data-testid="textarea-campaign-brief" value={description} onChange={(event) => setDescription(event.target.value)} minLength={10} required placeholder="Describe the deliverable, requirements and acceptance criteria." />
-        <div className="calc-row">
-          <div><label htmlFor="campaign-quantity">Number of tasks</label><input id="campaign-quantity" className="field" data-testid="input-campaign-quantity" type="number" min="1" max="100" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
-          <div><label htmlFor="campaign-reward">Reward per task (GH₵)</label><input id="campaign-reward" className="field" data-testid="input-campaign-reward" type="number" min="1" step=".5" value={reward} onChange={(event) => setReward(Number(event.target.value))} /></div>
+        <div className="step-pane" key={step}>
+          {step === 1 && <>
+            <label htmlFor="campaign-name" style={{ marginTop: 0 }}>Campaign title</label>
+            <input id="campaign-name" className="field" data-testid="input-campaign-name" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Create a product demo reel" />
+            <label htmlFor="campaign-category">Category</label>
+            <select id="campaign-category" className="field" data-testid="select-campaign-category" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select>
+            <label htmlFor="campaign-brief">What should the worker deliver?</label>
+            <textarea id="campaign-brief" className="field" data-testid="textarea-campaign-brief" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the deliverable, requirements and what counts as done." />
+          </>}
+          {step === 2 && <>
+            <div className="calc-row">
+              <div><label htmlFor="campaign-quantity" style={{ marginTop: 0 }}>Number of tasks</label><input id="campaign-quantity" className="field" data-testid="input-campaign-quantity" type="number" min="1" max="100" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
+              <div><label htmlFor="campaign-reward" style={{ marginTop: 0 }}>Reward per task (GH₵)</label><input id="campaign-reward" className="field" data-testid="input-campaign-reward" type="number" min="1" step=".5" value={reward} onChange={(event) => setReward(Number(event.target.value))} /></div>
+            </div>
+            {summary}
+            <p className="auth-caption">The worker always receives the full reward shown. The 10% fee is added on top.</p>
+          </>}
+          {step === 3 && <>
+            <span className="category">{category}</span>
+            <h2 style={{ margin: '10px 0 6px' }}>{title}</h2>
+            <p className="auth-caption" style={{ margin: '0 0 6px' }}>{description}</p>
+            <p className="auth-caption" style={{ margin: 0 }}>{quantity} tasks at {gh(reward)} each</p>
+            {summary}
+            <p className="auth-caption">Your budget is held safely and only released when you approve the work.</p>
+          </>}
         </div>
-        <div className="fee-calculator">
-          <div className="calc-result"><span>Workers receive</span><strong>{gh(rewardTotal)}</strong></div>
-          <div className="calc-result"><span>HUSTLA fee (10%)</span><strong>{gh(rewardTotal * 0.1)}</strong></div>
-          <div className="calc-result"><b>Total to fund</b><strong>{gh(rewardTotal * 1.1)}</strong></div>
-        </div>
-        <p className="auth-caption">The worker always receives the full reward shown. The 10% fee is added on top.</p>
         {error && <div className="notice" role="alert">{error}</div>}
-        <div className="form-actions">
-          <Link className="btn" href="/dashboard" data-testid="button-cancel-campaign">Cancel</Link>
-          <button type="submit" className="btn btn-primary" data-testid="button-submit-campaign">Submit for review</button>
+        <div className="form-actions split">
+          {step > 1 ? <button type="button" className="btn" data-testid="button-back-campaign" onClick={() => go(step - 1)}>Back</button> : <Link className="btn" href="/dashboard" data-testid="button-cancel-campaign">Cancel</Link>}
+          <button type="submit" className="btn btn-primary" data-testid="button-submit-campaign">{step < 3 ? 'Continue' : 'Submit for review'}</button>
         </div>
       </form>
     </AppShell>

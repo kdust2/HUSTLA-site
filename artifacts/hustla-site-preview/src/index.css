@@ -289,3 +289,29 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 .float-two { top:auto; bottom:92px; }
+
+@keyframes page-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+@keyframes pop { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+@keyframes pane-in { from { opacity:0; transform:translateX(18px); } to { opacity:1; transform:none; } }
+@keyframes toast-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+.page-in { animation:page-in .45s cubic-bezier(.2,.7,.2,1) both; }
+.pop { animation:pop .4s ease both; animation-delay:var(--d,0ms); }
+.step-pane { animation:pane-in .35s ease both; }
+.toast { animation:toast-in .3s ease; }
+.btn { transition:transform .2s, background .25s, border-color .25s, box-shadow .25s; }
+.btn:active { transform:scale(.97); }
+.btn-primary:hover { box-shadow:0 8px 20px #2455d640; }
+.field { transition:border-color .2s, box-shadow .2s; }
+.field:focus { border-color:#2455d6; box-shadow:0 0 0 3px #2455d626; }
+.explore-search { margin:0 0 12px; }
+.chips { display:flex; gap:8px; overflow-x:auto; padding:4px 0 14px; scrollbar-width:none; }
+.chips::-webkit-scrollbar { display:none; }
+.chip { flex:none; min-height:40px; padding:0 16px; border-radius:999px; border:1px solid #d8d5cd; background:#fffefa; color:#1d293c; font-weight:700; font-size:13px; white-space:nowrap; cursor:pointer; transition:background .25s, color .25s, border-color .25s, transform .15s; }
+.chip:hover { border-color:#1d293c; }
+.chip:active { transform:scale(.96); }
+.chip.on { background:#202e45; border-color:#202e45; color:#fff; }
+.steps { display:flex; flex-wrap:wrap; gap:8px; list-style:none; margin:0 0 20px; padding:0; }
+.steps li { padding:6px 14px; border-radius:999px; border:1px solid #d8d5cd; font-size:13px; font-weight:700; color:#697689; transition:background .3s, color .3s, border-color .3s; }
+.steps .on { background:#2455d6; border-color:#2455d6; color:#fff; }
+.steps .done { background:#edf1ff; border-color:#c9d6fb; color:#2455d6; }
+.form-actions.split { justify-content:space-between; }
