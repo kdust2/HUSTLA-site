@@ -34,13 +34,18 @@ export function ExplorePage() {
       {tasks.length > 0 ? (
         <section className="surface" key={category}>
           {tasks.map((task, index) => (
-            <div className="task-row pop" style={delay(index * 55)} key={task.id}>
+            <div className="task-row explore-row pop" style={delay(index * 55)} key={task.id}>
               <div className="task-info">
                 <span className="category">{task.category}</span>
                 <h3>{task.title}</h3>
-                <p>{task.days} days left · {task.spots} spots · {task.description}</p>
+                <p className="task-desc">{task.description}</p>
+                <p className="task-meta">
+                  <span className={task.days <= 2 ? 'urgent' : ''}>{task.days} {task.days === 1 ? 'day' : 'days'} left</span>
+                  <span>{task.spots} {task.spots === 1 ? 'spot' : 'spots'} open</span>
+                </p>
               </div>
-              <div className="reward">{gh(task.reward)}<small>worker receives</small>
+              <div className="task-pay">
+                <div className="pay-amount"><strong>{gh(task.reward)}</strong><small>Worker receives</small></div>
                 <button type="button" className={`btn btn-small ${applied.includes(task.id) ? '' : 'btn-primary'}`} data-testid={`button-apply-task-${task.id}`} onClick={() => toggle(task.id)}>{applied.includes(task.id) ? <><Check size={14} /> Applied</> : 'Apply'}</button>
               </div>
             </div>
