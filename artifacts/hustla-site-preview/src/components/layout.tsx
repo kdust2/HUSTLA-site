@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { BriefcaseBusiness, CircleHelp, Compass, CreditCard, Home, LogOut, Menu, Sparkles, X, Zap } from 'lucide-react';
+import { CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, Trophy, X, Zap } from 'lucide-react';
 import { useDemoAuth } from '@/lib/demoAuth';
 import { useScrollReveal } from '@/lib/motion';
 
@@ -11,8 +11,8 @@ export function Brand() {
 export const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: Home },
   { href: '/explore', label: 'Explore tasks', icon: Compass },
-  { href: '/businesses', label: 'Businesses', icon: BriefcaseBusiness },
-  { href: '/creators', label: 'Creators', icon: Sparkles },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/how-it-works', label: 'How it works', icon: Zap },
   { href: '/pricing', label: 'Pricing', icon: CreditCard },
   { href: '/help', label: 'Help', icon: CircleHelp },

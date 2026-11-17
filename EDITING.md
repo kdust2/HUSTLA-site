@@ -9,8 +9,8 @@ Everything lives in `artifacts/hustla-site-preview/src/`. Edit a file on GitHub 
 | Dashboard | `DashboardPage.tsx` |
 | Explore tasks | `ExplorePage.tsx` |
 | New campaign (3 steps) | `NewCampaignPage.tsx` |
-| Businesses | `BusinessesPage.tsx` |
-| Creators | `CreatorsPage.tsx` |
+| Campaigns | `CampaignsPage.tsx` |
+| Leaderboard | `LeaderboardPage.tsx` |
 | How it works | `HowItWorksPage.tsx` |
 | Pricing | `PricingPage.tsx` |
 | Help | `HelpPage.tsx` |

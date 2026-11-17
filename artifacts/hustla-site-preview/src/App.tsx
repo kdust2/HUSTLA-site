@@ -4,8 +4,8 @@ import { HomePage } from '@/pages/HomePage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ExplorePage } from '@/pages/ExplorePage';
 import { NewCampaignPage } from '@/pages/NewCampaignPage';
-import { BusinessesPage } from '@/pages/BusinessesPage';
-import { CreatorsPage } from '@/pages/CreatorsPage';
+import { CampaignsPage } from '@/pages/CampaignsPage';
+import { LeaderboardPage } from '@/pages/LeaderboardPage';
 import { HowItWorksPage } from '@/pages/HowItWorksPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { HelpPage } from '@/pages/HelpPage';
@@ -69,8 +69,10 @@ function AppRoutes() {
       <Route path="/dashboard">{() => <Protected><DashboardPage /></Protected>}</Route>
       <Route path="/new-campaign">{() => <Protected><NewCampaignPage /></Protected>}</Route>
       <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
-      <Route path="/businesses">{() => <Protected><BusinessesPage /></Protected>}</Route>
-      <Route path="/creators">{() => <Protected><CreatorsPage /></Protected>}</Route>
+      <Route path="/campaigns">{() => <Protected><CampaignsPage /></Protected>}</Route>
+      <Route path="/businesses"><Redirect to="/campaigns" /></Route>
+      <Route path="/leaderboard">{() => <Protected><LeaderboardPage /></Protected>}</Route>
+      <Route path="/creators"><Redirect to="/leaderboard" /></Route>
       <Route path="/how-it-works">{() => <Protected><HowItWorksPage /></Protected>}</Route>
       <Route path="/pricing">{() => <Protected><PricingPage /></Protected>}</Route>
       <Route path="/help">{() => <Protected><HelpPage /></Protected>}</Route>
