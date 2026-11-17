@@ -334,3 +334,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
  .task-pay { flex-direction:row; align-items:center; justify-content:space-between; width:100%; min-width:0; padding-top:14px; border-top:1px dashed #e0dcd2; }
  .pay-amount { text-align:left; }
 }
+
+@media (max-width:700px) {
+ .business-hero:after { width:150px; height:150px; right:-46px; top:-64px; }
+}

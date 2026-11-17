@@ -4,8 +4,13 @@ import { ArrowDownRight, ArrowRight, Plus } from 'lucide-react';
 import { categories, initialTasks, gh } from '@/lib/data';
 import { FLASH_KEY, type Campaign, loadSavedCampaigns } from '@/lib/campaigns';
 import { AppShell, Header } from '@/components/layout';
+import { useDemoAuth } from '@/lib/demoAuth';
 
 export function DashboardPage() {
+  const { user } = useDemoAuth();
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const firstName = (user?.name || 'there').split(' ')[0];
   const [mode, setMode] = useState<'worker' | 'publisher'>(() => (window.location.hash === '#publisher' ? 'publisher' : 'worker'));
   const [campaigns] = useState<Campaign[]>(() => [
     ...loadSavedCampaigns(),
@@ -27,7 +32,7 @@ export function DashboardPage() {
   const workerTasks = initialTasks.filter((task) => task.id !== 2);
   return (
     <AppShell title="Dashboard">
-      <Header eyebrow="Your HUSTLA" title="Good work, in motion." description="A quick look at the work you’re publishing, the tasks you’re taking on and your cedi balance." action={<Link className="btn btn-primary" href="/new-campaign" data-testid="button-new-campaign"><Plus size={16} /> New campaign</Link>} />
+      <Header eyebrow="Your HUSTLA" title={`${greeting}, ${firstName}.`} description="Here’s a quick look at the work you’re publishing, the tasks you’re taking on and your cedi balance." action={<Link className="btn btn-primary" href="/new-campaign" data-testid="button-new-campaign"><Plus size={16} /> New campaign</Link>} />
       <div className="stats-grid">
         {(mode === 'worker' ? [
           ['Withdrawable', 'GH₵186.00', 'Next payout · Friday'],
@@ -44,7 +49,7 @@ export function DashboardPage() {
       <div className="dash-grid">
         <section className="surface">
           <div className="surface-head"><h2>{mode === 'worker' ? 'Suggested tasks' : 'Your campaigns'}</h2><div className="public-actions"><button className="btn btn-small" data-testid="button-mode-worker" aria-pressed={mode === 'worker'} onClick={() => setMode('worker')}>Worker</button><button className="btn btn-small" data-testid="button-mode-publisher" aria-pressed={mode === 'publisher'} onClick={() => setMode('publisher')}>Publisher</button></div></div>
-          {mode === 'worker' ? workerTasks.slice(0, 4).map((task) => <div className="task-row" key={task.id}><div className="task-info"><span className="category">{task.category}</span><h3>{task.title}</h3><p>{task.days} days left · {task.spots} spots</p></div><div className="reward">{gh(task.reward)}<small>worker receives</small><button className={`btn btn-small ${applied.includes(task.id) ? '' : 'btn-primary'}`} data-testid={`button-dashboard-apply-${task.id}`} onClick={() => { setApplied((prev) => prev.includes(task.id) ? prev : [...prev, task.id]); notify('Application sent. The publisher has 24 hours to respond.'); }}>{applied.includes(task.id) ? 'Applied' : 'Apply'}</button></div></div>) : campaigns.map((campaign) => <div className="task-row" key={campaign.id}><div className="task-info"><span className="category">{campaign.category}</span><h3>{campaign.title}</h3><p>{campaign.quantity} tasks · {gh(campaign.reward)} each · budget held until approval</p></div><span className="category">{campaign.status}</span></div>)}
+          {mode === 'worker' ? workerTasks.slice(0, 4).map((task) => <div className="task-row explore-row" key={task.id}><div className="task-info"><span className="category">{task.category}</span><h3>{task.title}</h3><p className="task-meta"><span className={task.days <= 2 ? 'urgent' : ''}>{task.days} {task.days === 1 ? 'day' : 'days'} left</span><span>{task.spots} {task.spots === 1 ? 'spot' : 'spots'} open</span></p></div><div className="task-pay"><div className="pay-amount"><strong>{gh(task.reward)}</strong><small>Worker receives</small></div><button className={`btn btn-small ${applied.includes(task.id) ? '' : 'btn-primary'}`} data-testid={`button-dashboard-apply-${task.id}`} onClick={() => { setApplied((prev) => prev.includes(task.id) ? prev : [...prev, task.id]); notify('Application sent. The publisher has 24 hours to respond.'); }}>{applied.includes(task.id) ? 'Applied' : 'Apply'}</button></div></div>) : campaigns.map((campaign) => <div className="task-row" key={campaign.id}><div className="task-info"><span className="category">{campaign.category}</span><h3>{campaign.title}</h3><p>{campaign.quantity} tasks · {gh(campaign.reward)} each · budget held until approval</p></div><span className="category">{campaign.status}</span></div>)}
           {mode === 'worker' && <div className="surface-head"><Link href="/explore" className="btn btn-small" data-testid="link-dashboard-explore">Browse all tasks <ArrowRight size={14} /></Link></div>}
         </section>
         <aside>
