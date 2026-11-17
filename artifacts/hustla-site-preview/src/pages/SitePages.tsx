@@ -102,9 +102,9 @@ export function HomePage() {
       </header>
       <main className="home-hero">
         <div className="hero-copy">
-          <p className="eyebrow rise" style={delay(0)}>The Ghana work marketplace</p>
+          <p className="eyebrow rise" style={delay(0)}>The social marketplace for tasks</p>
           <h1 className="rise" style={delay(120)}>Make your next move <em>count.</em></h1>
-          <p className="home-lead rise" style={delay(240)}>HUSTLA connects Ghanaian businesses and creators with people ready to make, promote and get things done, paid in cedis.</p>
+          <p className="home-lead rise" style={delay(240)}>HUSTLA is where businesses, creators and everyday people post tasks, take them on and get paid in cedis, all in one community.</p>
           <div className="public-actions rise" style={delay(360)}>
             <Link className="btn btn-primary" href="/sign-up" data-testid="link-hero-sign-up">Create your account <ArrowRight size={16} /></Link>
             <Link className="btn" href="/sign-in" data-testid="link-hero-sign-in">Sign in</Link>
@@ -408,7 +408,7 @@ export function ProductPage({ page }: { page: 'businesses' | 'creators' | 'how-i
   const titles = {
     businesses: ['FOR BUSINESSES', 'Find your people. Make good work.', 'UGC, demos, graphics, testing and research — delivered by real people, with your budget held until approval.'],
     creators: ['FOR CREATORS', 'Promote your work. Earn from others.', 'Musicians, creators and freelancers can run campaigns for their own work and complete tasks for others — from one account.'],
-    'how-it-works': ['THE FLOW', 'Two journeys. One marketplace.', 'Clear deadlines on both sides, so good work does not get stuck waiting.'],
+    'how-it-works': ['THE FLOW', 'Two journeys. One community.', 'Clear deadlines on both sides, so good work does not get stuck waiting.'],
     pricing: ['PRICING & FEES', 'Simple, in cedis.', 'One monthly membership, one transparent fee, nothing hidden in the reward.'],
     help: ['HELP CENTRE', 'Answers, without the runaround.', 'The details on payouts, corrections, disputes and keeping the marketplace fair.'],
   } as const;
