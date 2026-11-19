@@ -1,10 +1,19 @@
 [build]
-  command = "pnpm install && pnpm --filter ./artifacts/hustla-site-preview run build"
+  command = "pnpm install --no-frozen-lockfile && pnpm --filter ./artifacts/hustla-site-preview run build"
   publish = "artifacts/hustla-site-preview/dist/public"
 
 [build.environment]
   PORT = "3000"
   BASE_PATH = "/"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
 
 [[redirects]]
   from = "/*"

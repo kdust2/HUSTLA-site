@@ -1,0 +1,332 @@
+import { getDatabase } from '@netlify/database';
+import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scrypt = promisify(scryptCb) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
+
+const CATEGORIES = [
+  'Business & Product Promotion', 'Social Media Growth', 'Music & Entertainment',
+  'Content Creation & UGC', 'Design & Branding', 'Video & Photo Services',
+  'Digital & Tech Services', 'Events & Experiences', 'Writing & Marketing',
+  'Fashion & Lifestyle', 'Education & Learning', 'Other Tasks & Opportunities',
+];
+const COOKIE = 'hustla_session';
+const SESSION_DAYS = 30;
+
+// Connect lazily so a missing database connection gives a clear 503 instead of crashing on import.
+let connection: ReturnType<typeof getDatabase> | null = null;
+const getDb = () => (connection ??= getDatabase());
+const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => (getDb().sql as any)(strings, ...values)) as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<any>;
+
+// ---------- schema (idempotent, runs once per cold start) ----------
+let ready: Promise<void> | null = null;
+function ensureSchema(): Promise<void> {
+  if (!ready) {
+    ready = (async () => {
+      await sql`CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS campaigns (
+        id SERIAL PRIMARY KEY,
+        owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        category TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 100),
+        reward NUMERIC(10,2) NOT NULL CHECK (reward >= 1),
+        days INTEGER NOT NULL DEFAULT 7,
+        status TEXT NOT NULL DEFAULT 'pending_review' CHECK (status IN ('pending_review','live','declined','closed')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        reviewed_at TIMESTAMPTZ,
+        reviewed_by INTEGER REFERENCES users(id)
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS applications (
+        id SERIAL PRIMARY KEY,
+        campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        worker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (campaign_id, worker_id)
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS app_secrets (
+        name TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS campaigns_status_idx ON campaigns (status, created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS campaigns_owner_idx ON campaigns (owner_id)`;
+    })().catch((error) => { ready = null; throw error; });
+  }
+  return ready;
+}
+
+// ---------- helpers ----------
+class HttpError extends Error {
+  constructor(public status: number, public code: string, message?: string) { super(message ?? code); }
+}
+const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
+
+const rowsOf = (result: any): any[] => (Array.isArray(result) ? result : result?.rows ?? []);
+const b64url = (buf: Buffer | string) => Buffer.from(buf).toString('base64url');
+// Session signing key: SESSION_SECRET if set, otherwise a random key generated once and kept in the database.
+let cachedSecret: string | null = null;
+async function secret(): Promise<string> {
+  if (cachedSecret) return cachedSecret;
+  const fromEnv = process.env.SESSION_SECRET;
+  if (fromEnv && fromEnv.length >= 16) return (cachedSecret = fromEnv);
+  await sql`INSERT INTO app_secrets (name, value) VALUES ('session', ${randomBytes(32).toString('hex')}) ON CONFLICT (name) DO NOTHING`;
+  const rows = rowsOf(await sql`SELECT value FROM app_secrets WHERE name = 'session'`);
+  if (!rows[0]) throw new HttpError(500, 'server_misconfigured', 'Could not load the session key.');
+  return (cachedSecret = rows[0].value as string);
+}
+const sign = async (payload: string) => createHmac('sha256', await secret()).update(payload).digest('base64url');
+const safeEqual = (a: string, b: string) => {
+  const x = Buffer.from(a); const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+const adminEmails = () => (process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+const isAdminEmail = (email: string) => adminEmails().includes(email.toLowerCase());
+
+async function hashPassword(password: string) {
+  const salt = randomBytes(16);
+  const hash = await scrypt(password, salt, 64);
+  return `s1$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+async function verifyPassword(password: string, stored: string) {
+  const [version, saltB64, hashB64] = stored.split('$');
+  if (version !== 's1' || !saltB64 || !hashB64) return false;
+  const expected = Buffer.from(hashB64, 'base64');
+  const actual = await scrypt(password, Buffer.from(saltB64, 'base64'), expected.length);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+const DUMMY_HASH = 's1$AAAAAAAAAAAAAAAAAAAAAA==$' + Buffer.alloc(64).toString('base64');
+
+async function sessionCookie(userId: number) {
+  const exp = Date.now() + SESSION_DAYS * 86400_000;
+  const payload = b64url(JSON.stringify({ u: userId, e: exp }));
+  return `${COOKIE}=${payload}.${await sign(payload)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}`;
+}
+const clearCookie = () => `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+
+async function readSessionUserId(req: Request): Promise<number | null> {
+  const header = req.headers.get('cookie') ?? '';
+  const match = header.split(/;\s*/).find((part) => part.startsWith(`${COOKIE}=`));
+  if (!match) return null;
+  const token = match.slice(COOKIE.length + 1);
+  const [payload, mac] = token.split('.');
+  if (!payload || !mac || !safeEqual(mac, await sign(payload))) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return typeof data.u === 'number' && typeof data.e === 'number' && data.e > Date.now() ? data.u : null;
+  } catch { return null; }
+}
+
+type User = { id: number; name: string; email: string; isAdmin: boolean };
+const publicUser = (row: any): User => ({ id: row.id, name: row.name, email: row.email, isAdmin: isAdminEmail(row.email) });
+
+async function currentUser(req: Request): Promise<User | null> {
+  const id = await readSessionUserId(req);
+  if (!id) return null;
+  const rows = rowsOf(await sql`SELECT id, name, email FROM users WHERE id = ${id}`);
+  return rows[0] ? publicUser(rows[0]) : null;
+}
+async function requireUser(req: Request) {
+  const user = await currentUser(req);
+  if (!user) throw new HttpError(401, 'not_signed_in', 'Please sign in.');
+  return user;
+}
+async function requireAdmin(req: Request) {
+  const user = await requireUser(req);
+  if (!user.isAdmin) throw new HttpError(403, 'forbidden', 'Admins only.');
+  return user;
+}
+
+async function body(req: Request): Promise<Record<string, unknown>> {
+  try {
+    const data = await req.json();
+    return data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  } catch { throw new HttpError(400, 'bad_json', 'Request body must be JSON.'); }
+}
+const str = (value: unknown, min: number, max: number, label: string) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (text.length < min || text.length > max) throw new HttpError(400, 'invalid', `${label} must be ${min} to ${max} characters.`);
+  return text;
+};
+
+const campaignView = (row: any) => {
+  const ageDays = Math.floor((Date.now() - new Date(row.created_at).getTime()) / 86400_000);
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    category: row.category,
+    quantity: row.quantity,
+    reward: Number(row.reward),
+    days: row.days,
+    daysLeft: Math.max(0, row.days - ageDays),
+    status: row.status,
+    createdAt: row.created_at,
+    ...(row.spots_open !== undefined ? { spotsOpen: Math.max(0, Number(row.spots_open)) } : {}),
+    ...(row.applicant_count !== undefined ? { applicantCount: Number(row.applicant_count) } : {}),
+    ...(row.applied !== undefined ? { applied: !!row.applied } : {}),
+    ...(row.owner_id !== undefined ? { isOwn: !!row.is_own } : {}),
+    ...(row.owner_name !== undefined ? { ownerName: row.owner_name, ownerEmail: row.owner_email } : {}),
+  };
+};
+
+// ---------- routes ----------
+async function route(req: Request, path: string[]): Promise<Response> {
+  const method = req.method;
+  const [a, b, c] = path;
+
+  // auth
+  if (a === 'auth') {
+    if (b === 'me' && method === 'GET') {
+      return json({ user: await currentUser(req) });
+    }
+    if (b === 'signup' && method === 'POST') {
+      const data = await body(req);
+      const name = str(data.name, 2, 80, 'Name');
+      const email = str(data.email, 5, 160, 'Email').toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'invalid', 'Enter a valid email address.');
+      const password = typeof data.password === 'string' ? data.password : '';
+      if (password.length < 8 || password.length > 200) throw new HttpError(400, 'invalid', 'Password must be at least 8 characters.');
+      if (isAdminEmail(email)) {
+        const expected = process.env.ADMIN_SETUP_CODE ?? '';
+        const given = typeof data.adminCode === 'string' ? data.adminCode.trim() : '';
+        if (!expected) throw new HttpError(403, 'admin_signup_disabled', 'Admin sign-up is not enabled yet.');
+        if (!given) throw new HttpError(403, 'admin_code_required', 'This email is reserved for the HUSTLA admin. Enter the admin setup code.');
+        if (!safeEqual(given, expected)) throw new HttpError(403, 'admin_code_invalid', 'That admin setup code is not right.');
+      }
+      const existing = rowsOf(await sql`SELECT id FROM users WHERE email = ${email}`);
+      if (existing.length) throw new HttpError(409, 'email_taken', 'An account with that email already exists. Try signing in.');
+      const hash = await hashPassword(password);
+      const rows = rowsOf(await sql`INSERT INTO users (email, name, password_hash) VALUES (${email}, ${name}, ${hash}) RETURNING id, name, email`);
+      const user = publicUser(rows[0]);
+      return json({ user }, 201, { 'set-cookie': await sessionCookie(user.id) });
+    }
+    if (b === 'signin' && method === 'POST') {
+      const data = await body(req);
+      const email = (typeof data.email === 'string' ? data.email : '').trim().toLowerCase();
+      const password = typeof data.password === 'string' ? data.password : '';
+      const rows = rowsOf(await sql`SELECT id, name, email, password_hash FROM users WHERE email = ${email}`);
+      const ok = await verifyPassword(password, rows[0]?.password_hash ?? DUMMY_HASH);
+      if (!rows[0] || !ok) throw new HttpError(401, 'bad_credentials', 'Email or password is not right.');
+      const user = publicUser(rows[0]);
+      return json({ user }, 200, { 'set-cookie': await sessionCookie(user.id) });
+    }
+    if (b === 'signout' && method === 'POST') {
+      return json({ ok: true }, 200, { 'set-cookie': clearCookie() });
+    }
+  }
+
+  // campaigns
+  if (a === 'campaigns') {
+    if (!b && method === 'POST') {
+      const user = await requireUser(req);
+      const data = await body(req);
+      const title = str(data.title, 8, 120, 'Title');
+      const description = str(data.description, 10, 2000, 'Brief');
+      const category = typeof data.category === 'string' && CATEGORIES.includes(data.category) ? data.category : null;
+      if (!category) throw new HttpError(400, 'invalid', 'Pick a valid category.');
+      const quantity = Number(data.quantity);
+      const reward = Math.round(Number(data.reward) * 100) / 100;
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new HttpError(400, 'invalid', 'Tasks must be a whole number from 1 to 100.');
+      if (!Number.isFinite(reward) || reward < 1 || reward > 100000) throw new HttpError(400, 'invalid', 'Reward must be at least GH₵1.');
+      const rows = rowsOf(await sql`INSERT INTO campaigns (owner_id, title, description, category, quantity, reward)
+        VALUES (${user.id}, ${title}, ${description}, ${category}, ${quantity}, ${reward}) RETURNING *`);
+      return json({ campaign: campaignView(rows[0]) }, 201);
+    }
+    if (b === 'mine' && method === 'GET') {
+      const user = await requireUser(req);
+      const rows = rowsOf(await sql`SELECT c.*, (SELECT COUNT(*) FROM applications a WHERE a.campaign_id = c.id) AS applicant_count
+        FROM campaigns c WHERE c.owner_id = ${user.id} ORDER BY c.created_at DESC`);
+      return json({ campaigns: rows.map(campaignView) });
+    }
+    if (b === 'live' && method === 'GET') {
+      const user = await requireUser(req);
+      const rows = rowsOf(await sql`SELECT c.*,
+          c.quantity - (SELECT COUNT(*) FROM applications a WHERE a.campaign_id = c.id AND a.status = 'accepted') AS spots_open,
+          EXISTS (SELECT 1 FROM applications a WHERE a.campaign_id = c.id AND a.worker_id = ${user.id}) AS applied,
+          (c.owner_id = ${user.id}) AS is_own
+        FROM campaigns c WHERE c.status = 'live' ORDER BY c.reviewed_at DESC NULLS LAST, c.created_at DESC`);
+      return json({ campaigns: rows.map(campaignView) });
+    }
+    if (b && c === 'apply' && method === 'POST') {
+      const user = await requireUser(req);
+      const id = Number(b);
+      if (!Number.isInteger(id)) throw new HttpError(400, 'invalid', 'Bad campaign id.');
+      const rows = rowsOf(await sql`SELECT id, owner_id, status FROM campaigns WHERE id = ${id}`);
+      if (!rows[0] || rows[0].status !== 'live') throw new HttpError(404, 'not_found', 'That campaign is not open.');
+      if (rows[0].owner_id === user.id) throw new HttpError(400, 'own_campaign', 'You cannot apply to your own campaign.');
+      await sql`INSERT INTO applications (campaign_id, worker_id) VALUES (${id}, ${user.id}) ON CONFLICT (campaign_id, worker_id) DO NOTHING`;
+      return json({ applied: true });
+    }
+  }
+
+  // applications
+  if (a === 'applications' && b === 'mine' && method === 'GET') {
+    const user = await requireUser(req);
+    const rows = rowsOf(await sql`SELECT campaign_id, status FROM applications WHERE worker_id = ${user.id}`);
+    return json({ applications: rows.map((row) => ({ campaignId: row.campaign_id, status: row.status })) });
+  }
+
+  // admin
+  if (a === 'admin' && b === 'campaigns') {
+    await requireAdmin(req);
+    if (!c && method === 'GET') {
+      const status = new URL(req.url).searchParams.get('status') ?? 'pending_review';
+      if (!['pending_review', 'live', 'declined', 'closed', 'all'].includes(status)) throw new HttpError(400, 'invalid', 'Bad status.');
+      const rows = rowsOf(await sql`SELECT c.*, u.name AS owner_name, u.email AS owner_email,
+          (SELECT COUNT(*) FROM applications a WHERE a.campaign_id = c.id) AS applicant_count
+        FROM campaigns c JOIN users u ON u.id = c.owner_id
+        WHERE (${status} = 'all' OR c.status = ${status}) ORDER BY c.created_at DESC LIMIT 200`);
+      return json({ campaigns: rows.map(campaignView) });
+    }
+    if (b && path[3] === 'review' && method === 'POST') {
+      const admin = await requireAdmin(req);
+      const id = Number(c);
+      if (!Number.isInteger(id)) throw new HttpError(400, 'invalid', 'Bad campaign id.');
+      const data = await body(req);
+      const decision = data.decision === 'approve' ? 'live' : data.decision === 'decline' ? 'declined' : null;
+      if (!decision) throw new HttpError(400, 'invalid', 'Decision must be approve or decline.');
+      const rows = rowsOf(await sql`UPDATE campaigns SET status = ${decision}, reviewed_at = now(), reviewed_by = ${admin.id}
+        WHERE id = ${id} AND status = 'pending_review' RETURNING *`);
+      if (!rows[0]) throw new HttpError(409, 'not_pending', 'That campaign is no longer waiting for review.');
+      return json({ campaign: campaignView(rows[0]) });
+    }
+  }
+
+  throw new HttpError(404, 'not_found', 'No such endpoint.');
+}
+
+export default async (req: Request): Promise<Response> => {
+  try {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const origin = req.headers.get('origin');
+      if (origin) {
+        const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? new URL(req.url).host;
+        if (new URL(origin).host !== host) throw new HttpError(403, 'forbidden', 'Cross-site request blocked.');
+      }
+    }
+    await ensureSchema();
+    const path = new URL(req.url).pathname.replace(/^\/(?:\.netlify\/functions\/api|api)\/?/, '').split('/').filter(Boolean);
+    return await route(req, path);
+  } catch (error) {
+    if (error instanceof HttpError) return json({ error: error.code, message: error.message }, error.status);
+    if (error instanceof Error && error.name === 'MissingDatabaseConnectionError') {
+      console.error('database connection is not configured yet');
+      return json({ error: 'database_not_ready', message: 'The database is not connected yet. Please try again shortly.' }, 503);
+    }
+    console.error('api error', error);
+    return json({ error: 'server_error', message: 'Something went wrong. Please try again.' }, 500);
+  }
+};
+
+export const config = { path: '/api/*' };

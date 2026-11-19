@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { categories, gh } from '@/lib/data';
-import { FLASH_KEY, saveCampaign, type Campaign } from '@/lib/campaigns';
+import { FLASH_KEY } from '@/lib/campaigns';
+import { api } from '@/lib/api';
 import { AppShell, Header } from '@/components/layout';
 
 export function NewCampaignPage() {
@@ -13,10 +14,11 @@ export function NewCampaignPage() {
   const [quantity, setQuantity] = useState(3);
   const [reward, setReward] = useState(40);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
   const rewardTotal = quantity * reward;
 
   const go = (next: number) => { setError(''); setStep(next); };
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (step === 1 && (title.trim().length < 8 || description.trim().length < 10)) {
       setError('Add a clear title (at least 8 letters) and a short brief to continue.');
@@ -27,7 +29,14 @@ export function NewCampaignPage() {
       return;
     }
     if (step < 3) { go(step + 1); return; }
-    saveCampaign({ id: Date.now(), title: title.trim(), category, status: 'Pending review', quantity, reward });
+    setSaving(true);
+    try {
+      await api('/campaigns', { body: { title: title.trim(), description: description.trim(), category, quantity, reward } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not submit the campaign. Please try again.');
+      setSaving(false);
+      return;
+    }
     try { window.sessionStorage.setItem(FLASH_KEY, 'Submitted. HUSTLA reviews new campaigns within 24 hours.'); } catch { /* storage can be unavailable */ }
     setLocation('/dashboard#publisher');
   };
@@ -78,7 +87,7 @@ export function NewCampaignPage() {
         {error && <div className="notice" role="alert">{error}</div>}
         <div className="form-actions split">
           {step > 1 ? <button type="button" className="btn" data-testid="button-back-campaign" onClick={() => go(step - 1)}>Back</button> : <Link className="btn" href="/dashboard" data-testid="button-cancel-campaign">Cancel</Link>}
-          <button type="submit" className="btn btn-primary" data-testid="button-submit-campaign">{step < 3 ? 'Continue' : 'Submit for review'}</button>
+          <button type="submit" className="btn btn-primary" data-testid="button-submit-campaign" disabled={saving}>{step < 3 ? 'Continue' : saving ? 'Submitting…' : 'Submit for review'}</button>
         </div>
       </form>
     </AppShell>

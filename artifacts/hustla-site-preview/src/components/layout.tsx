@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, Trophy, X, Zap } from 'lucide-react';
-import { useDemoAuth } from '@/lib/demoAuth';
+import { CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, X, Zap } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 import { useScrollReveal } from '@/lib/motion';
 
 export function Brand() {
@@ -21,7 +21,8 @@ export const navItems = [
 export function AppShell({ children, title }: { children: ReactNode; title: string }) {
   useScrollReveal();
   const [location] = useLocation();
-  const { user, signOut } = useDemoAuth();
+  const { user, signOut } = useAuth();
+  const items = user?.isAdmin ? [...navItems.slice(0, 3), { href: '/admin', label: 'Admin review', icon: ShieldCheck }, ...navItems.slice(3)] : navItems;
   const [menuOpen, setMenuOpen] = useState(false);
   const name = user?.name || 'HUSTLA member';
   const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -43,14 +44,14 @@ export function AppShell({ children, title }: { children: ReactNode; title: stri
         </div>
         <p className="side-kicker">Your workspace</p>
         <nav aria-label="Workspace navigation">
-          {navItems.map(({ href, label, icon: Icon }) => (
+          {items.map(({ href, label, icon: Icon }) => (
             <Link key={href} href={href} onClick={() => setMenuOpen(false)} className={`side-link ${location === href ? 'active' : ''}`} aria-current={location === href ? 'page' : undefined} data-testid={`link-nav-${href.slice(1)}`}>
               <Icon /><span>{label}</span>
             </Link>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-profile"><div className="avatar">{initials}</div><div className="profile-copy">{name}<small>HUSTLA member</small></div></div>
+          <div className="sidebar-profile"><div className="avatar">{initials}</div><div className="profile-copy">{name}<small>{user?.isAdmin ? 'HUSTLA admin' : 'HUSTLA member'}</small></div></div>
           <button className="btn btn-small drawer-signout" data-testid="button-sign-out" onClick={() => signOut()}><LogOut size={14} /> Sign out</button>
         </div>
       </aside>
