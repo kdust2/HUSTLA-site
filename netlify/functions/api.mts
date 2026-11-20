@@ -1,4 +1,3 @@
-import { getDatabase } from '@netlify/database';
 import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
@@ -13,10 +12,33 @@ const CATEGORIES = [
 const COOKIE = 'hustla_session';
 const SESSION_DAYS = 30;
 
-// Connect lazily so a missing database connection gives a clear 503 instead of crashing on import.
-let connection: ReturnType<typeof getDatabase> | null = null;
-const getDb = () => (connection ??= getDatabase());
-const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => (getDb().sql as any)(strings, ...values)) as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<any>;
+// Database access. On Render (or anywhere with DATABASE_URL) use a normal Postgres connection;
+// on Netlify fall back to Netlify Database. Connected lazily so a missing connection gives a clear 503.
+type SqlImpl = (strings: TemplateStringsArray, values: unknown[]) => Promise<any>;
+let impl: Promise<SqlImpl> | null = null;
+function getImpl(): Promise<SqlImpl> {
+  impl ??= (async (): Promise<SqlImpl> => {
+    const url = process.env.DATABASE_URL;
+    if (url) {
+      const pg = (await import('pg')).default;
+      const pool = new pg.Pool({
+        connectionString: url,
+        max: 5,
+        // Render's external hostnames need TLS; internal ones do not.
+        ssl: /\.render\.com/.test(url) ? { rejectUnauthorized: false } : undefined,
+      });
+      return async (strings, values) => {
+        const text = strings.reduce((acc, part, i) => acc + part + (i < values.length ? `$${i + 1}` : ''), '');
+        return (await pool.query(text, values as any[])).rows;
+      };
+    }
+    const { getDatabase } = await import('@netlify/database');
+    const db = getDatabase();
+    return async (strings, values) => (db.sql as any)(strings, ...values);
+  })();
+  return impl;
+}
+const sql = async (strings: TemplateStringsArray, ...values: unknown[]): Promise<any> => (await getImpl())(strings, values);
 
 // ---------- schema (idempotent, runs once per cold start) ----------
 let ready: Promise<void> | null = null;
