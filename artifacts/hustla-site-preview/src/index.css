@@ -414,3 +414,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .admin-hint { padding-left:20px; }
   .admin-actions .btn { flex:1; }
 }
+
+/* ---------- worker / publisher mode ---------- */
+.mode-switch { display:inline-flex; padding:3px; gap:2px; background:#ece8de; border-radius:999px; }
+.mode-switch button { border:0; background:transparent; min-height:34px; padding:0 14px; border-radius:999px; font-weight:700; font-size:13px; color:#4d596b; display:inline-flex; align-items:center; gap:6px; cursor:pointer; white-space:nowrap; transition:background .2s, color .2s; }
+.mode-switch button:hover:not(.on) { color:#1d293c; }
+.mode-switch button.on.worker { background:#2455d6; color:#fff; }
+.mode-switch button.on.publisher { background:#f4c449; color:#1d293c; }
+.mode-band { display:flex; align-items:center; gap:10px; padding:10px 38px; font-size:13px; border-bottom:1px solid; }
+.mode-band svg { flex:none; }
+.mode-band.worker { background:#edf1ff; color:#1d3fa0; border-color:#d3dcfa; }
+.mode-band.publisher { background:#fff2d3; color:#7a5200; border-color:#f0dca0; }
+@media (max-width: 980px) { .mode-band { padding-inline:24px; } }
+@media (max-width: 700px) {
+  .mode-band { padding:9px 18px; font-size:12px; }
+  .app-topbar .top-avatar { display:none; }
+  .app-topbar .crumb { display:none; }
+  .top-actions { margin-left:auto; }
+  .mode-switch button { padding:0 12px; }
+}
+@media (max-width: 380px) { .mode-switch button svg { display:none; } .mode-band-copy { display:none; } }

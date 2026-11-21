@@ -6,6 +6,7 @@ import { FLASH_KEY } from '@/lib/campaigns';
 import { api, statusLabel, type ApiCampaign } from '@/lib/api';
 import { AppShell, Header } from '@/components/layout';
 import { useAuth } from '@/lib/auth';
+import { useMode } from '@/lib/mode';
 
 type MyApplication = { campaignId: number; status: 'pending' | 'accepted' | 'declined' };
 
@@ -14,7 +15,7 @@ export function DashboardPage() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const firstName = (user?.name || 'there').split(' ')[0];
-  const [mode, setMode] = useState<'worker' | 'publisher'>(() => (window.location.hash === '#publisher' ? 'publisher' : 'worker'));
+  const { mode } = useMode();
   const [mine, setMine] = useState<ApiCampaign[]>([]);
   const [live, setLive] = useState<ApiCampaign[]>([]);
   const [applications, setApplications] = useState<MyApplication[]>([]);
@@ -76,13 +77,13 @@ export function DashboardPage() {
 
   return (
     <AppShell title="Dashboard">
-      <Header eyebrow="Your HUSTLA" title={`${greeting}, ${firstName}.`} description="Here’s a quick look at the work you’re publishing and the tasks you’re taking on." action={<Link className="btn btn-primary" href="/new-campaign" data-testid="button-new-campaign"><Plus size={16} /> New campaign</Link>} />
+      <Header eyebrow={mode === 'worker' ? 'Worker dashboard' : 'Publisher dashboard'} title={`${greeting}, ${firstName}.`} description={mode === 'worker' ? 'Here’s a quick look at the tasks you can take on and the applications you’ve sent.' : 'Here’s a quick look at the campaigns you’re publishing and who has applied.'} action={<Link className="btn btn-primary" href="/new-campaign" data-testid="button-new-campaign"><Plus size={16} /> New campaign</Link>} />
       <div className="stats-grid">
         {stats.map(([label, value, sub]) => <div key={label} className="stat-card reveal"><span>{label}</span><strong>{loading ? '–' : value}</strong><small>{sub}</small></div>)}
       </div>
       <div className="dash-grid">
         <section className="surface">
-          <div className="surface-head"><h2>{mode === 'worker' ? 'Suggested tasks' : 'Your campaigns'}</h2><div className="public-actions"><button className="btn btn-small" data-testid="button-mode-worker" aria-pressed={mode === 'worker'} onClick={() => setMode('worker')}>Worker</button><button className="btn btn-small" data-testid="button-mode-publisher" aria-pressed={mode === 'publisher'} onClick={() => setMode('publisher')}>Publisher</button></div></div>
+          <div className="surface-head"><h2>{mode === 'worker' ? 'Suggested tasks' : 'Your campaigns'}</h2></div>
           {loadError && <div className="notice" role="alert">{loadError}</div>}
           {!loading && !loadError && mode === 'worker' && workerTasks.length === 0 && <div className="task-row"><div className="task-info"><h3>No open tasks yet</h3><p>New campaigns appear here as soon as HUSTLA approves them.</p></div></div>}
           {!loading && !loadError && mode === 'publisher' && mine.length === 0 && <div className="task-row"><div className="task-info"><h3>You have not published a campaign yet</h3><p>Start one and HUSTLA will review it within 24 hours.</p></div></div>}

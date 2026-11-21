@@ -139,7 +139,7 @@ export function AdminPage() {
   );
 
   return (
-    <AppShell title="Admin">
+    <AppShell title="Admin" showMode={false}>
       <Header eyebrow="Admin" title="Run HUSTLA." description="Review campaigns, look after your members and help people back into their accounts." />
 
       <div className="admin-stats">

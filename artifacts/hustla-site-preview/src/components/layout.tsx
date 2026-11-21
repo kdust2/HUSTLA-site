@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, X, Zap } from 'lucide-react';
+import { Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, X, Zap } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
+import { useMode } from '@/lib/mode';
 import { useScrollReveal } from '@/lib/motion';
 
 export function Brand() {
@@ -18,7 +19,27 @@ export const navItems = [
   { href: '/help', label: 'Help', icon: CircleHelp },
 ];
 
-export function AppShell({ children, title }: { children: ReactNode; title: string }) {
+export function ModeSwitch() {
+  const { mode, setMode } = useMode();
+  return (
+    <div className="mode-switch" role="group" aria-label="Switch between Worker and Publisher">
+      <button type="button" className={`worker${mode === 'worker' ? ' on' : ''}`} aria-pressed={mode === 'worker'} data-testid="button-mode-worker" onClick={() => setMode('worker')}><Briefcase size={15} aria-hidden="true" /> Worker</button>
+      <button type="button" className={`publisher${mode === 'publisher' ? ' on' : ''}`} aria-pressed={mode === 'publisher'} data-testid="button-mode-publisher" onClick={() => setMode('publisher')}><Megaphone size={15} aria-hidden="true" /> Publisher</button>
+    </div>
+  );
+}
+
+function ModeBand() {
+  const { mode } = useMode();
+  return (
+    <div className={`mode-band ${mode}`} data-testid="mode-band" role="status">
+      {mode === 'worker' ? <Briefcase size={16} aria-hidden="true" /> : <Megaphone size={16} aria-hidden="true" />}
+      <span><strong>You’re in {mode === 'worker' ? 'Worker' : 'Publisher'} mode.</strong> <span className="mode-band-copy">{mode === 'worker' ? 'Find tasks, apply and get paid for finished work.' : 'Post campaigns and get work done by real people.'}</span></span>
+    </div>
+  );
+}
+
+export function AppShell({ children, title, showMode = true }: { children: ReactNode; title: string; showMode?: boolean }) {
   useScrollReveal();
   const [location] = useLocation();
   const { user, signOut } = useAuth();
@@ -63,9 +84,11 @@ export function AppShell({ children, title }: { children: ReactNode; title: stri
           </div>
           <div className="top-actions">
             <span className="welcome">Good work starts here, {name.split(' ')[0]}.</span>
-            <div className="avatar" aria-hidden="true">{initials}</div>
+            {showMode && <ModeSwitch />}
+            <div className="avatar top-avatar" aria-hidden="true">{initials}</div>
           </div>
         </header>
+        {showMode && <ModeBand />}
         <main className="content page-in" key={location}>{children}</main>
       </div>
     </div>

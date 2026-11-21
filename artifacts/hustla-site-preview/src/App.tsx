@@ -13,6 +13,7 @@ import { AdminPage } from '@/pages/AdminPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { ModeProvider } from '@/lib/mode';
 import { ApiError } from '@/lib/api';
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -125,7 +126,9 @@ function App() {
   return (
     <WouterRouter base={basePath}>
       <AuthProvider>
+        <ModeProvider>
         <AppRoutes />
+        </ModeProvider>
       </AuthProvider>
     </WouterRouter>
   );
