@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Redirect } from 'wouter';
-import { Check, Copy, KeyRound, MessageCircle, Search, Users, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Landmark, MessageCircle, Search, Users, X } from 'lucide-react';
 import { gh } from '@/lib/data';
 import {
-  api, statusLabel, timeAgo,
-  type AdminSummary, type AdminUser, type ApiCampaign, type CampaignStatus, type ResetRequest, type ResetStatus,
+  api, formatDay, formatMomo, networkLabel, statusLabel, timeAgo,
+  type AdminPayoutMethod, type AdminSummary, type AdminUser, type AdminWithdrawal, type ApiCampaign, type CampaignStatus,
+  type ResetRequest, type ResetStatus, type WithdrawalStatus,
 } from '@/lib/api';
 import { AppShell, Header } from '@/components/layout';
 import { useAuth } from '@/lib/auth';
 
-type Tab = 'campaigns' | 'members' | 'resets';
+type Tab = 'campaigns' | 'members' | 'resets' | 'payouts';
+const withdrawalFilters: { value: WithdrawalStatus; label: string }[] = [
+  { value: 'requested', label: 'To pay' }, { value: 'paid', label: 'Paid' }, { value: 'rejected', label: 'Rejected' }, { value: 'cancelled', label: 'Cancelled' },
+];
+const creditKinds = [
+  { value: 'deposit', label: 'Deposit (available funds)' },
+  { value: 'earning', label: 'Earnings (withdrawable)' },
+  { value: 'pending', label: 'Pending earnings' },
+  { value: 'release', label: 'Release pending → withdrawable' },
+];
 type Filter = CampaignStatus | 'all';
 
 const campaignFilters: { value: Filter; label: string }[] = [
@@ -32,6 +42,13 @@ export function AdminPage() {
   const [campaigns, setCampaigns] = useState<ApiCampaign[]>([]);
   const [members, setMembers] = useState<AdminUser[]>([]);
   const [resets, setResets] = useState<ResetRequest[]>([]);
+  const [wdFilter, setWdFilter] = useState<WithdrawalStatus>('requested');
+  const [withdrawals, setWithdrawals] = useState<AdminWithdrawal[]>([]);
+  const [methods, setMethods] = useState<AdminPayoutMethod[]>([]);
+  const [panel, setPanel] = useState<{ id: number; mode: 'pay' | 'reject' } | null>(null);
+  const [panelText, setPanelText] = useState('');
+  const [credit, setCredit] = useState({ email: '', kind: 'earning', amount: '', note: '' });
+  const [crediting, setCrediting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -47,12 +64,20 @@ export function AdminPage() {
     try { setSummary(await api<AdminSummary>('/admin/summary')); } catch { /* the tab below shows any real error */ }
   }, []);
 
-  const loadTab = useCallback(async (which: Tab, status: Filter) => {
+  const loadTab = useCallback(async (which: Tab, status: Filter, wd: WithdrawalStatus = 'requested') => {
     setLoading(true);
     try {
       if (which === 'campaigns') setCampaigns((await api<{ campaigns: ApiCampaign[] }>(`/admin/campaigns?status=${status}`)).campaigns);
       if (which === 'members') setMembers((await api<{ users: AdminUser[] }>('/admin/users')).users);
       if (which === 'resets') setResets((await api<{ requests: ResetRequest[] }>('/admin/resets')).requests);
+      if (which === 'payouts') {
+        const [w, m] = await Promise.all([
+          api<{ withdrawals: AdminWithdrawal[] }>(`/admin/withdrawals?status=${wd}`),
+          api<{ methods: AdminPayoutMethod[] }>('/admin/payout-methods'),
+        ]);
+        setWithdrawals(w.withdrawals);
+        setMethods(m.methods);
+      }
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load this section.');
@@ -62,7 +87,7 @@ export function AdminPage() {
   }, []);
 
   useEffect(() => { if (isAdmin) void loadSummary(); }, [isAdmin, loadSummary]);
-  useEffect(() => { if (isAdmin) void loadTab(tab, filter); }, [isAdmin, tab, filter, loadTab]);
+  useEffect(() => { if (isAdmin) void loadTab(tab, filter, wdFilter); }, [isAdmin, tab, filter, wdFilter, loadTab]);
 
   const needle = query.trim().toLowerCase();
   const shownCampaigns = useMemo(() => campaigns.filter((c) =>
@@ -124,6 +149,52 @@ export function AdminPage() {
     catch { notify('Could not copy. Select the link and copy it by hand.'); }
   };
 
+  const refreshPayouts = async () => { await Promise.all([loadTab('payouts', filter, wdFilter), loadSummary()]); };
+
+  const settleWithdrawal = async (w: AdminWithdrawal, mode: 'pay' | 'reject') => {
+    if (mode === 'reject' && panelText.trim().length < 3) { notify('Give the member a reason (at least 3 characters).'); return; }
+    setBusyId(w.id);
+    try {
+      await api(`/admin/withdrawals/${w.id}/${mode === 'pay' ? 'paid' : 'reject'}`, { body: mode === 'pay' ? { reference: panelText.trim() } : { reason: panelText.trim() } });
+      notify(mode === 'pay' ? 'Marked as paid.' : 'Rejected. The money is back in their wallet.');
+      setPanel(null);
+      setPanelText('');
+      await refreshPayouts();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not save that.');
+      await refreshPayouts();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const verifyMethod = async (m: AdminPayoutMethod) => {
+    setBusyId(m.userId);
+    try {
+      await api(`/admin/payout-methods/${m.userId}/verify`, { method: 'POST', body: {} });
+      notify(`${m.name}'s number is verified.`);
+      await refreshPayouts();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not verify that number.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const submitCredit = async (event: FormEvent) => {
+    event.preventDefault();
+    setCrediting(true);
+    try {
+      const data = await api<{ name: string }>('/admin/wallet/credit', { body: { email: credit.email.trim(), kind: credit.kind, amount: Number(credit.amount), note: credit.note.trim() } });
+      notify(`Done. ${data.name}'s wallet is updated.`);
+      setCredit({ ...credit, amount: '', note: '' });
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not update that wallet.');
+    } finally {
+      setCrediting(false);
+    }
+  };
+
   const toggleBrief = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -146,18 +217,22 @@ export function AdminPage() {
         {stat('Awaiting review', summary?.pending, summary?.pending ? 'Needs your decision' : 'All caught up', () => openTab('campaigns', 'pending_review'), !!summary?.pending)}
         {stat('Live campaigns', summary?.live, 'Visible to workers', () => openTab('campaigns', 'live'))}
         {stat('Members', summary?.users, 'Signed-up accounts', () => openTab('members'))}
+        {stat('Payouts', summary?.withdrawals, summary?.unverified ? `${summary.unverified} ${summary.unverified === 1 ? 'number' : 'numbers'} to verify` : summary?.withdrawals ? 'Waiting to be paid' : 'Nothing to pay', () => openTab('payouts'), !!(summary?.withdrawals || summary?.unverified))}
         {stat('Password resets', summary?.resets, summary?.resets ? 'People waiting for help' : 'None open', () => openTab('resets'), !!summary?.resets)}
       </div>
 
       <div className="admin-tabs" role="tablist" aria-label="Admin sections">
         <button type="button" role="tab" aria-selected={tab === 'campaigns'} className={tab === 'campaigns' ? 'on' : ''} data-testid="admin-tab-campaigns" onClick={() => openTab('campaigns')}>Campaigns</button>
         <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'on' : ''} data-testid="admin-tab-members" onClick={() => openTab('members')}>Members</button>
+        <button type="button" role="tab" aria-selected={tab === 'payouts'} className={tab === 'payouts' ? 'on' : ''} data-testid="admin-tab-payouts" onClick={() => openTab('payouts')}>
+          Payouts{summary && summary.withdrawals + summary.unverified > 0 ? <em className="admin-badge">{summary.withdrawals + summary.unverified}</em> : null}
+        </button>
         <button type="button" role="tab" aria-selected={tab === 'resets'} className={tab === 'resets' ? 'on' : ''} data-testid="admin-tab-resets" onClick={() => openTab('resets')}>
           Password resets{summary?.resets ? <em className="admin-badge">{summary.resets}</em> : null}
         </button>
       </div>
 
-      {tab !== 'resets' && (
+      {(tab === 'campaigns' || tab === 'members') && (
         <div className="admin-toolbar">
           {tab === 'campaigns' && (
             <div className="chips admin-filter" role="group" aria-label="Filter campaigns">
@@ -296,6 +371,101 @@ export function AdminPage() {
               })}
             </section>
           )}
+        </>
+      )}
+
+      {!loading && !error && tab === 'payouts' && (
+        <>
+          <div className="admin-note">
+            <Landmark size={18} aria-hidden="true" />
+            <p>Withdrawals are paid on Tuesdays and Fridays. Send each one by mobile money, then mark it paid. A rejected withdrawal goes straight back to the member’s wallet.</p>
+          </div>
+
+          <h2 className="admin-h">Withdrawal requests</h2>
+          <div className="chips admin-filter" role="group" aria-label="Filter withdrawals">
+            {withdrawalFilters.map((item) => (
+              <button key={item.value} type="button" className={`chip ${wdFilter === item.value ? 'on' : ''}`} aria-pressed={wdFilter === item.value} data-testid={`chip-wd-${item.value}`} onClick={() => { setPanel(null); setWdFilter(item.value); }}>{item.label}</button>
+            ))}
+          </div>
+          {wdFilter === 'requested' && withdrawals.length > 0 && (
+            <p className="admin-total" data-testid="admin-wd-total">{withdrawals.length} {withdrawals.length === 1 ? 'request' : 'requests'} to pay, {gh(withdrawals.reduce((sum, w) => sum + w.amount, 0))} in total.</p>
+          )}
+          {withdrawals.length === 0 ? (
+            <div className="empty-state"><Landmark size={26} /><h2>Nothing here</h2><p>{wdFilter === 'requested' ? 'No withdrawals are waiting to be paid.' : 'No withdrawals in this view.'}</p></div>
+          ) : (
+            <section className="surface">
+              {withdrawals.map((w) => (
+                <div className="admin-reset" key={w.id} data-testid={`admin-withdrawal-${w.id}`}>
+                  <div className="admin-row">
+                    <div className="admin-person">
+                      <span className="avatar" aria-hidden="true">{initials(w.name)}</span>
+                      <span><strong>{gh(w.amount)} · {w.name}</strong><small>{w.email}</small></span>
+                    </div>
+                    <div className="admin-row-meta">
+                      <span>{networkLabel[w.network]} {formatMomo(w.number)}</span>
+                      <span>{w.accountName}</span>
+                      <span>{w.status === 'requested' ? `Pay ${formatDay(w.payoutDate)}` : w.status === 'rejected' && w.reason ? w.reason : w.reference ? `Ref ${w.reference}` : timeAgo(w.processedAt ?? w.createdAt)}</span>
+                    </div>
+                    {w.status === 'requested' ? (
+                      <div className="admin-actions">
+                        <button type="button" className="btn btn-small" data-testid={`button-wd-reject-${w.id}`} disabled={busyId === w.id} onClick={() => { setPanel({ id: w.id, mode: 'reject' }); setPanelText(''); }}>Reject</button>
+                        <button type="button" className="btn btn-small btn-primary" data-testid={`button-wd-pay-${w.id}`} disabled={busyId === w.id} onClick={() => { setPanel({ id: w.id, mode: 'pay' }); setPanelText(''); }}>Mark paid</button>
+                      </div>
+                    ) : <span className={`pill pill-wd-${w.status}`}>{w.status === 'paid' ? 'Paid' : w.status === 'rejected' ? 'Rejected' : 'Cancelled'}</span>}
+                  </div>
+                  {w.status === 'requested' && !w.verified && <p className="admin-hint warn">This number was changed after it was verified. Check it before you pay.</p>}
+                  {panel?.id === w.id && (
+                    <div className="admin-linkbox">
+                      <label htmlFor={`wd-text-${w.id}`}>{panel.mode === 'pay' ? 'Mobile money reference (optional)' : 'Reason for the member (required)'}</label>
+                      <div className="admin-linkrow">
+                        <input id={`wd-text-${w.id}`} className="field" data-testid={`input-wd-text-${w.id}`} value={panelText} onChange={(e) => setPanelText(e.target.value)} placeholder={panel.mode === 'pay' ? 'e.g. the transaction ID' : 'e.g. The name on the number does not match'} />
+                        <button type="button" className={`btn btn-small ${panel.mode === 'pay' ? 'btn-primary' : 'btn-danger'}`} data-testid={`button-wd-confirm-${w.id}`} disabled={busyId === w.id} onClick={() => void settleWithdrawal(w, panel.mode)}>{panel.mode === 'pay' ? `Confirm: I sent ${gh(w.amount)}` : 'Confirm reject'}</button>
+                        <button type="button" className="btn btn-small" onClick={() => setPanel(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
+
+          <h2 className="admin-h">Numbers to verify</h2>
+          {methods.length === 0 ? (
+            <p className="wallet-empty">Every saved mobile money number is verified.</p>
+          ) : (
+            <section className="surface">
+              {methods.map((m) => (
+                <div className="admin-row" key={m.userId} data-testid={`admin-method-${m.userId}`}>
+                  <div className="admin-person">
+                    <span className="avatar" aria-hidden="true">{initials(m.name)}</span>
+                    <span><strong>{m.name}</strong><small>{m.email}</small></span>
+                  </div>
+                  <div className="admin-row-meta">
+                    <span>{networkLabel[m.network]} {formatMomo(m.number)}</span>
+                    <span>Name on number: {m.accountName}</span>
+                    <span>Added {timeAgo(m.updatedAt)}</span>
+                  </div>
+                  <div className="admin-actions"><button type="button" className="btn btn-small btn-primary" data-testid={`button-verify-${m.userId}`} disabled={busyId === m.userId} onClick={() => void verifyMethod(m)}><Check size={14} /> Verify</button></div>
+                </div>
+              ))}
+              <p className="admin-hint">Make sure the name on the number matches the member before you verify it.</p>
+            </section>
+          )}
+
+          <h2 className="admin-h">Add money to a wallet</h2>
+          <form className="surface admin-credit" onSubmit={submitCredit}>
+            <p className="wallet-help">Use this to record a deposit you have confirmed, or earnings you have approved, until online payments are connected. Every entry is saved in the member’s history.</p>
+            <div className="admin-credit-grid">
+              <div><label htmlFor="credit-email" className="auth-label">Member’s email</label><input id="credit-email" className="field" data-testid="input-credit-email" type="email" value={credit.email} onChange={(e) => setCredit({ ...credit, email: e.target.value })} required /></div>
+              <div><label htmlFor="credit-kind" className="auth-label">What is this?</label>
+                <select id="credit-kind" className="field" data-testid="select-credit-kind" value={credit.kind} onChange={(e) => setCredit({ ...credit, kind: e.target.value })}>
+                  {creditKinds.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+                </select></div>
+              <div><label htmlFor="credit-amount" className="auth-label">Amount (GH₵)</label><input id="credit-amount" className="field" data-testid="input-credit-amount" inputMode="decimal" value={credit.amount} onChange={(e) => setCredit({ ...credit, amount: e.target.value })} required /></div>
+              <div><label htmlFor="credit-note" className="auth-label">Note</label><input id="credit-note" className="field" data-testid="input-credit-note" placeholder="e.g. Deposit confirmed, MoMo ref 123" value={credit.note} onChange={(e) => setCredit({ ...credit, note: e.target.value })} required minLength={3} /></div>
+            </div>
+            <button type="submit" className="btn btn-primary" data-testid="button-credit-submit" disabled={crediting} style={{ marginTop: 16 }}>{crediting ? 'Saving…' : 'Update wallet'}</button>
+          </form>
         </>
       )}
 

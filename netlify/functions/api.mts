@@ -12,6 +12,8 @@ const CATEGORIES = [
 const COOKIE = 'hustla_session';
 const SESSION_DAYS = 30;
 const RESET_HOURS = 24;
+const MIN_WITHDRAWAL_P = 2000; // GH₵20, from the HUSTLA wallet rules
+const NETWORKS = ['mtn', 'telecel', 'at'];
 
 // Database access. On Render (or anywhere with DATABASE_URL) use a normal Postgres connection;
 // on Netlify fall back to Netlify Database. Connected lazily so a missing connection gives a clear 503.
@@ -89,6 +91,46 @@ function ensureSchema(): Promise<void> {
         dismissed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`;
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_seq INTEGER NOT NULL DEFAULT 0`;
+      await sql`CREATE TABLE IF NOT EXISTS wallet_ledger (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        bucket TEXT NOT NULL CHECK (bucket IN ('available','reserved','pending','withdrawable','payout_hold')),
+        amount_p BIGINT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_type TEXT,
+        ref_id INTEGER,
+        note TEXT,
+        actor_id INTEGER REFERENCES users(id),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS payout_methods (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id),
+        network TEXT NOT NULL CHECK (network IN ('mtn','telecel','at')),
+        number TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        verified_at TIMESTAMPTZ,
+        verified_by INTEGER REFERENCES users(id),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS withdrawals (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        amount_p BIGINT NOT NULL CHECK (amount_p > 0),
+        network TEXT NOT NULL,
+        number TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        payout_date DATE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested','paid','rejected','cancelled')),
+        reason TEXT,
+        reference TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        processed_at TIMESTAMPTZ,
+        processed_by INTEGER REFERENCES users(id)
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS wallet_ledger_user_idx ON wallet_ledger (user_id, id DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals (status, payout_date)`;
+      await sql`CREATE INDEX IF NOT EXISTS withdrawals_user_idx ON withdrawals (user_id, id DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS password_resets_token_idx ON password_resets (token_hash)`;
       await sql`CREATE INDEX IF NOT EXISTS campaigns_status_idx ON campaigns (status, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS campaigns_owner_idx ON campaigns (owner_id)`;
@@ -248,6 +290,67 @@ const campaignView = (row: any) => {
   };
 };
 
+
+// ---------- wallet ----------
+const ghs = (pesewas: number) => Number(pesewas) / 100;
+// Whole pesewas from a GH₵ amount; null if it is not a positive number with at most 2 decimals.
+function toPesewas(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
+  if (!Number.isFinite(n) || n <= 0 || n > 1_000_000) return null;
+  const p = Math.round(n * 100);
+  return Math.abs(n * 100 - p) < 1e-6 ? p : null;
+}
+function normaliseMomo(input: unknown): string | null {
+  let digits = (typeof input === 'string' ? input : '').replace(/[\s-]/g, '');
+  if (digits.startsWith('+233')) digits = '0' + digits.slice(4);
+  else if (digits.startsWith('233')) digits = '0' + digits.slice(3);
+  return /^0[25]\d{8}$/.test(digits) ? digits : null;
+}
+// Payout runs are Tuesdays and Fridays (Ghana time = GMT). A request is included in a run if it is made
+// before 12:00 noon on the day before: Monday for Tuesday, Thursday for Friday.
+export function nextPayout(now: Date = new Date()): { date: string; cutoff: string } {
+  for (let i = 0; i < 10; i++) {
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + i));
+    const dow = day.getUTCDay();
+    if (dow !== 2 && dow !== 5) continue;
+    const cutoff = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() - 1, 12, 0, 0));
+    if (cutoff.getTime() > now.getTime()) return { date: day.toISOString().slice(0, 10), cutoff: cutoff.toISOString() };
+  }
+  throw new Error('no payout date found');
+}
+
+async function walletView(userId: number) {
+  const sums = rowsOf(await sql`SELECT bucket, COALESCE(SUM(amount_p), 0) AS total FROM wallet_ledger WHERE user_id = ${userId}::int GROUP BY bucket`);
+  const b: Record<string, number> = { available: 0, reserved: 0, pending: 0, withdrawable: 0, payout_hold: 0 };
+  for (const row of sums) b[row.bucket] = Number(row.total);
+  const pm = rowsOf(await sql`SELECT network, number, account_name, verified_at FROM payout_methods WHERE user_id = ${userId}::int`)[0];
+  const ledger = rowsOf(await sql`SELECT id, bucket, amount_p, kind, note, created_at FROM wallet_ledger
+    WHERE user_id = ${userId}::int AND bucket <> 'payout_hold' ORDER BY id DESC LIMIT 50`);
+  const wds = rowsOf(await sql`SELECT id, amount_p, network, number, status, reason, reference,
+      to_char(payout_date, 'YYYY-MM-DD') AS payout_date, created_at, processed_at
+    FROM withdrawals WHERE user_id = ${userId}::int ORDER BY id DESC LIMIT 30`);
+  return {
+    balances: { available: ghs(b.available), reserved: ghs(b.reserved), pending: ghs(b.pending), withdrawable: ghs(b.withdrawable), inPayout: ghs(b.payout_hold) },
+    payoutMethod: pm ? { network: pm.network, number: pm.number, accountName: pm.account_name, verified: !!pm.verified_at } : null,
+    ledger: ledger.map((row) => ({ id: Number(row.id), bucket: row.bucket, amount: ghs(Number(row.amount_p)), kind: row.kind, note: row.note, createdAt: row.created_at })),
+    withdrawals: wds.map((row) => ({
+      id: row.id, amount: ghs(Number(row.amount_p)), network: row.network, number: row.number, status: row.status,
+      reason: row.reason, reference: row.reference, payoutDate: row.payout_date, createdAt: row.created_at, processedAt: row.processed_at,
+    })),
+    minWithdrawal: ghs(MIN_WITHDRAWAL_P),
+    nextPayout: nextPayout(),
+  };
+}
+
+// Money that leaves a bucket is guarded by a per-user counter: the write only happens if nobody else touched
+// this wallet since we read it, so two requests at once cannot spend the same money twice.
+async function walletSnapshot(userId: number, bucket: string) {
+  const row = rowsOf(await sql`SELECT u.wallet_seq AS seq,
+      COALESCE((SELECT SUM(amount_p) FROM wallet_ledger WHERE user_id = u.id AND bucket = ${bucket}), 0) AS bal
+    FROM users u WHERE u.id = ${userId}::int`)[0];
+  return { seq: Number(row.seq), balance: Number(row.bal) };
+}
+
 // ---------- routes ----------
 async function route(req: Request, path: string[]): Promise<Response> {
   const method = req.method;
@@ -388,6 +491,75 @@ async function route(req: Request, path: string[]): Promise<Response> {
     }
   }
 
+  // wallet
+  if (a === 'wallet') {
+    const user = await requireUser(req);
+    if (!b && method === 'GET') return json(await walletView(user.id));
+    if (b === 'payout-method' && method === 'PUT') {
+      throttle(`payout-method:${user.id}`, 10, 3600_000);
+      const data = await body(req);
+      const network = typeof data.network === 'string' ? data.network : '';
+      if (!NETWORKS.includes(network)) throw new HttpError(400, 'invalid', 'Pick MTN, Telecel or AT.');
+      const number = normaliseMomo(data.number);
+      if (!number) throw new HttpError(400, 'invalid', 'Enter a valid Ghana mobile money number, like 0244123456.');
+      const accountName = str(data.accountName, 3, 80, 'Name on the account');
+      // Changing the number or network means it has to be verified again.
+      await sql`INSERT INTO payout_methods (user_id, network, number, account_name)
+        VALUES (${user.id}::int, ${network}, ${number}, ${accountName})
+        ON CONFLICT (user_id) DO UPDATE SET
+          verified_at = CASE WHEN payout_methods.number = EXCLUDED.number AND payout_methods.network = EXCLUDED.network THEN payout_methods.verified_at ELSE NULL END,
+          verified_by = CASE WHEN payout_methods.number = EXCLUDED.number AND payout_methods.network = EXCLUDED.network THEN payout_methods.verified_by ELSE NULL END,
+          network = EXCLUDED.network, number = EXCLUDED.number, account_name = EXCLUDED.account_name, updated_at = now()`;
+      return json(await walletView(user.id));
+    }
+    if (b === 'withdrawals' && !c && method === 'POST') {
+      throttle(`withdraw:${user.id}`, 20, 3600_000);
+      const data = await body(req);
+      const amountP = toPesewas(data.amount);
+      if (!amountP) throw new HttpError(400, 'invalid', 'Enter an amount in cedis, with at most 2 decimal places.');
+      if (amountP < MIN_WITHDRAWAL_P) throw new HttpError(400, 'below_minimum', `The minimum withdrawal is GH₵${ghs(MIN_WITHDRAWAL_P).toFixed(2)}.`);
+      const pm = rowsOf(await sql`SELECT network, number, account_name, verified_at FROM payout_methods WHERE user_id = ${user.id}::int`)[0];
+      if (!pm) throw new HttpError(400, 'no_payout_method', 'Add your mobile money number first.');
+      if (!pm.verified_at) throw new HttpError(400, 'payout_not_verified', 'Your mobile money number is waiting for HUSTLA to verify it.');
+      const payoutDate = nextPayout().date;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const snap = await walletSnapshot(user.id, 'withdrawable');
+        if (snap.balance < amountP) throw new HttpError(400, 'insufficient_funds', 'You do not have that much available to withdraw.');
+        const done = rowsOf(await sql`WITH bump AS (
+            UPDATE users SET wallet_seq = wallet_seq + 1 WHERE id = ${user.id}::int AND wallet_seq = ${snap.seq}::int RETURNING id
+          ), w AS (
+            INSERT INTO withdrawals (user_id, amount_p, network, number, account_name, payout_date)
+            SELECT ${user.id}::int, ${amountP}::bigint, ${pm.network}::text, ${pm.number}::text, ${pm.account_name}::text, ${payoutDate}::date FROM bump
+            RETURNING id
+          ), l AS (
+            INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, ref_type, ref_id, note)
+            SELECT ${user.id}::int, 'withdrawable'::text, (-(${amountP}::bigint)), 'withdrawal_request'::text, 'withdrawal'::text, w.id, 'Withdrawal requested'::text FROM w
+            UNION ALL
+            SELECT ${user.id}::int, 'payout_hold'::text, ${amountP}::bigint, 'withdrawal_request'::text, 'withdrawal'::text, w.id, 'Withdrawal requested'::text FROM w
+            RETURNING 1
+          ) SELECT id FROM w`);
+        if (done.length) return json(await walletView(user.id), 201);
+      }
+      throw new HttpError(409, 'busy', 'Your wallet was updated at the same moment. Please try again.');
+    }
+    if (b === 'withdrawals' && c && path[3] === 'cancel' && method === 'POST') {
+      const id = Number(c);
+      if (!Number.isInteger(id)) throw new HttpError(400, 'invalid', 'Bad withdrawal id.');
+      const done = rowsOf(await sql`WITH c AS (
+          UPDATE withdrawals SET status = 'cancelled', processed_at = now()
+          WHERE id = ${id}::int AND user_id = ${user.id}::int AND status = 'requested' RETURNING id, amount_p
+        ), l AS (
+          INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, ref_type, ref_id, note)
+          SELECT ${user.id}::int, 'payout_hold'::text, (-c.amount_p)::bigint, 'withdrawal_cancel'::text, 'withdrawal'::text, c.id, 'Withdrawal cancelled'::text FROM c
+          UNION ALL
+          SELECT ${user.id}::int, 'withdrawable'::text, c.amount_p::bigint, 'withdrawal_cancel'::text, 'withdrawal'::text, c.id, 'Withdrawal cancelled'::text FROM c
+          RETURNING 1
+        ) SELECT id FROM c`);
+      if (!done.length) throw new HttpError(409, 'not_cancellable', 'That withdrawal can no longer be cancelled.');
+      return json(await walletView(user.id));
+    }
+  }
+
   // applications
   if (a === 'applications' && b === 'mine' && method === 'GET') {
     const user = await requireUser(req);
@@ -428,10 +600,12 @@ async function route(req: Request, path: string[]): Promise<Response> {
       (SELECT COUNT(*) FROM campaigns WHERE status = 'live') AS live,
       (SELECT COUNT(*) FROM campaigns WHERE status = 'declined') AS declined,
       (SELECT COUNT(*) FROM users) AS users,
-      (SELECT COUNT(*) FROM password_resets WHERE used_at IS NULL AND dismissed_at IS NULL) AS resets`)[0];
+      (SELECT COUNT(*) FROM password_resets WHERE used_at IS NULL AND dismissed_at IS NULL) AS resets,
+      (SELECT COUNT(*) FROM withdrawals WHERE status = 'requested') AS withdrawals,
+      (SELECT COUNT(*) FROM payout_methods WHERE verified_at IS NULL) AS unverified`)[0];
     return json({
       pending: Number(row.pending), live: Number(row.live), declined: Number(row.declined),
-      users: Number(row.users), resets: Number(row.resets), emailEnabled: emailEnabled(),
+      users: Number(row.users), resets: Number(row.resets), withdrawals: Number(row.withdrawals), unverified: Number(row.unverified), emailEnabled: emailEnabled(),
     });
   }
   if (a === 'admin' && b === 'users' && method === 'GET') {
@@ -472,6 +646,106 @@ async function route(req: Request, path: string[]): Promise<Response> {
       await sql`UPDATE password_resets SET dismissed_at = now() WHERE id = ${id} AND used_at IS NULL`;
       return json({ ok: true });
     }
+  }
+
+  if (a === 'admin' && b === 'withdrawals') {
+    const admin = await requireAdmin(req);
+    if (!c && method === 'GET') {
+      const status = new URL(req.url).searchParams.get('status') ?? 'requested';
+      if (!['requested', 'paid', 'rejected', 'cancelled', 'all'].includes(status)) throw new HttpError(400, 'invalid', 'Bad status.');
+      const rows = rowsOf(await sql`SELECT w.id, w.user_id, w.amount_p, w.network, w.number, w.account_name, w.status, w.reason, w.reference,
+          to_char(w.payout_date, 'YYYY-MM-DD') AS payout_date, w.created_at, w.processed_at, u.name, u.email,
+          (pm.verified_at IS NOT NULL AND pm.number = w.number) AS verified
+        FROM withdrawals w JOIN users u ON u.id = w.user_id LEFT JOIN payout_methods pm ON pm.user_id = w.user_id
+        WHERE (${status} = 'all' OR w.status = ${status})
+        ORDER BY CASE WHEN w.status = 'requested' THEN 0 ELSE 1 END, w.payout_date ASC, w.id DESC LIMIT 200`);
+      return json({ withdrawals: rows.map((row) => ({
+        id: row.id, userId: row.user_id, name: row.name, email: row.email, amount: ghs(Number(row.amount_p)), network: row.network,
+        number: row.number, accountName: row.account_name, status: row.status, reason: row.reason, reference: row.reference,
+        payoutDate: row.payout_date, createdAt: row.created_at, processedAt: row.processed_at, verified: !!row.verified,
+      })) });
+    }
+    const id = Number(c);
+    if (c && Number.isInteger(id) && path[3] === 'paid' && method === 'POST') {
+      const data = await body(req);
+      const reference = typeof data.reference === 'string' ? data.reference.trim().slice(0, 80) : '';
+      const done = rowsOf(await sql`WITH p AS (
+          UPDATE withdrawals SET status = 'paid', reference = ${reference || null}, processed_at = now(), processed_by = ${admin.id}::int
+          WHERE id = ${id}::int AND status = 'requested' RETURNING id, user_id, amount_p
+        ), l AS (
+          INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, ref_type, ref_id, note, actor_id)
+          SELECT p.user_id, 'payout_hold'::text, (-p.amount_p)::bigint, 'withdrawal_paid'::text, 'withdrawal'::text, p.id, 'Withdrawal paid'::text, ${admin.id}::int FROM p
+          RETURNING 1
+        ) SELECT id FROM p`);
+      if (!done.length) throw new HttpError(409, 'not_pending', 'That withdrawal is no longer waiting for payout.');
+      return json({ ok: true });
+    }
+    if (c && Number.isInteger(id) && path[3] === 'reject' && method === 'POST') {
+      const data = await body(req);
+      const reason = str(data.reason, 3, 200, 'Reason');
+      const done = rowsOf(await sql`WITH r AS (
+          UPDATE withdrawals SET status = 'rejected', reason = ${reason}, processed_at = now(), processed_by = ${admin.id}::int
+          WHERE id = ${id}::int AND status = 'requested' RETURNING id, user_id, amount_p
+        ), l AS (
+          INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, ref_type, ref_id, note, actor_id)
+          SELECT r.user_id, 'payout_hold'::text, (-r.amount_p)::bigint, 'withdrawal_reject'::text, 'withdrawal'::text, r.id, ${reason}::text, ${admin.id}::int FROM r
+          UNION ALL
+          SELECT r.user_id, 'withdrawable'::text, r.amount_p::bigint, 'withdrawal_reject'::text, 'withdrawal'::text, r.id, ${reason}::text, ${admin.id}::int FROM r
+          RETURNING 1
+        ) SELECT id FROM r`);
+      if (!done.length) throw new HttpError(409, 'not_pending', 'That withdrawal is no longer waiting for payout.');
+      return json({ ok: true });
+    }
+  }
+  if (a === 'admin' && b === 'payout-methods') {
+    const admin = await requireAdmin(req);
+    if (!c && method === 'GET') {
+      const rows = rowsOf(await sql`SELECT pm.user_id, pm.network, pm.number, pm.account_name, pm.updated_at, u.name, u.email
+        FROM payout_methods pm JOIN users u ON u.id = pm.user_id WHERE pm.verified_at IS NULL ORDER BY pm.updated_at ASC LIMIT 200`);
+      return json({ methods: rows.map((row) => ({
+        userId: row.user_id, name: row.name, email: row.email, network: row.network, number: row.number, accountName: row.account_name, updatedAt: row.updated_at,
+      })) });
+    }
+    const userId = Number(c);
+    if (c && Number.isInteger(userId) && path[3] === 'verify' && method === 'POST') {
+      const done = rowsOf(await sql`UPDATE payout_methods SET verified_at = now(), verified_by = ${admin.id}::int
+        WHERE user_id = ${userId}::int AND verified_at IS NULL RETURNING user_id`);
+      if (!done.length) throw new HttpError(404, 'not_found', 'Nothing to verify for that member.');
+      return json({ ok: true });
+    }
+  }
+  if (a === 'admin' && b === 'wallet' && c === 'credit' && method === 'POST') {
+    const admin = await requireAdmin(req);
+    const data = await body(req);
+    const email = (typeof data.email === 'string' ? data.email : '').trim().toLowerCase();
+    const kind = typeof data.kind === 'string' ? data.kind : '';
+    const amountP = toPesewas(data.amount);
+    const note = str(data.note, 3, 200, 'Note');
+    if (!amountP) throw new HttpError(400, 'invalid', 'Enter an amount in cedis, with at most 2 decimal places.');
+    if (!['deposit', 'earning', 'pending', 'release'].includes(kind)) throw new HttpError(400, 'invalid', 'Pick what kind of credit this is.');
+    const target = rowsOf(await sql`SELECT id, name FROM users WHERE email = ${email}`)[0];
+    if (!target) throw new HttpError(404, 'not_found', 'No member has that email.');
+    if (kind === 'release') {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const snap = await walletSnapshot(target.id, 'pending');
+        if (snap.balance < amountP) throw new HttpError(400, 'insufficient_funds', 'That member does not have that much pending.');
+        const done = rowsOf(await sql`WITH bump AS (
+            UPDATE users SET wallet_seq = wallet_seq + 1 WHERE id = ${target.id}::int AND wallet_seq = ${snap.seq}::int RETURNING id
+          ), l AS (
+            INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, note, actor_id)
+            SELECT ${target.id}::int, 'pending'::text, (-(${amountP}::bigint)), 'release'::text, ${note}::text, ${admin.id}::int FROM bump
+            UNION ALL
+            SELECT ${target.id}::int, 'withdrawable'::text, ${amountP}::bigint, 'release'::text, ${note}::text, ${admin.id}::int FROM bump
+            RETURNING 1
+          ) SELECT id FROM bump`);
+        if (done.length) return json({ ok: true, name: target.name });
+      }
+      throw new HttpError(409, 'busy', 'That wallet was updated at the same moment. Please try again.');
+    }
+    const bucket = kind === 'deposit' ? 'available' : kind === 'earning' ? 'withdrawable' : 'pending';
+    await sql`INSERT INTO wallet_ledger (user_id, bucket, amount_p, kind, note, actor_id)
+      VALUES (${target.id}::int, ${bucket}, ${amountP}::bigint, ${kind}, ${note}, ${admin.id}::int)`;
+    return json({ ok: true, name: target.name });
   }
 
   throw new HttpError(404, 'not_found', 'No such endpoint.');

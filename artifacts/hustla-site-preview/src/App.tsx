@@ -10,6 +10,7 @@ import { HowItWorksPage } from '@/pages/HowItWorksPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { HelpPage } from '@/pages/HelpPage';
 import { AdminPage } from '@/pages/AdminPage';
+import { WalletPage } from '@/pages/WalletPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -111,6 +112,7 @@ function AppRoutes() {
       <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
       <Route path="/campaigns">{() => <Protected><CampaignsPage /></Protected>}</Route>
       <Route path="/businesses"><Redirect to="/campaigns" /></Route>
+      <Route path="/wallet">{() => <Protected><WalletPage /></Protected>}</Route>
       <Route path="/admin">{() => <Protected><AdminPage /></Protected>}</Route>
       <Route path="/leaderboard">{() => <Protected><LeaderboardPage /></Protected>}</Route>
       <Route path="/creators"><Redirect to="/leaderboard" /></Route>

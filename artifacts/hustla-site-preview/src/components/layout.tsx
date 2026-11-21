@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, X, Zap } from 'lucide-react';
+import { Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useMode } from '@/lib/mode';
 import { useScrollReveal } from '@/lib/motion';
@@ -13,6 +13,7 @@ export const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: Home },
   { href: '/explore', label: 'Explore tasks', icon: Compass },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { href: '/wallet', label: 'Wallet', icon: Wallet },
   { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
   { href: '/how-it-works', label: 'How it works', icon: Zap },
   { href: '/pricing', label: 'Pricing', icon: CreditCard },
@@ -43,7 +44,7 @@ export function AppShell({ children, title, showMode = true }: { children: React
   useScrollReveal();
   const [location] = useLocation();
   const { user, signOut } = useAuth();
-  const items = user?.isAdmin ? [...navItems.slice(0, 3), { href: '/admin', label: 'Admin review', icon: ShieldCheck }, ...navItems.slice(3)] : navItems;
+  const items = user?.isAdmin ? [...navItems.slice(0, 4), { href: '/admin', label: 'Admin', icon: ShieldCheck }, ...navItems.slice(4)] : navItems;
   const [menuOpen, setMenuOpen] = useState(false);
   const name = user?.name || 'HUSTLA member';
   const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();

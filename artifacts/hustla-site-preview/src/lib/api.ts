@@ -57,7 +57,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   return data as T;
 }
 
-export type AdminSummary = { pending: number; live: number; declined: number; users: number; resets: number; emailEnabled: boolean };
+export type AdminSummary = { pending: number; live: number; declined: number; users: number; resets: number; withdrawals: number; unverified: number; emailEnabled: boolean };
 export type AdminUser = { id: number; name: string; email: string; createdAt: string; campaigns: number; applications: number; isAdmin: boolean };
 export type ResetStatus = 'waiting' | 'link_ready' | 'expired' | 'done' | 'dismissed';
 export type ResetRequest = { id: number; name: string; email: string; createdAt: string; isAdmin: boolean; status: ResetStatus };
@@ -72,4 +72,28 @@ export function timeAgo(iso: string): string {
   const days = Math.floor(hours / 24);
   if (days < 14) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+export type Network = 'mtn' | 'telecel' | 'at';
+export const networkLabel: Record<Network, string> = { mtn: 'MTN MoMo', telecel: 'Telecel Cash', at: 'AT Money' };
+export type WithdrawalStatus = 'requested' | 'paid' | 'rejected' | 'cancelled';
+export type Wallet = {
+  balances: { available: number; reserved: number; pending: number; withdrawable: number; inPayout: number };
+  payoutMethod: { network: Network; number: string; accountName: string; verified: boolean } | null;
+  ledger: { id: number; bucket: string; amount: number; kind: string; note: string | null; createdAt: string }[];
+  withdrawals: { id: number; amount: number; network: Network; number: string; status: WithdrawalStatus; reason: string | null; reference: string | null; payoutDate: string; createdAt: string; processedAt: string | null }[];
+  minWithdrawal: number;
+  nextPayout: { date: string; cutoff: string };
+};
+export type AdminWithdrawal = {
+  id: number; userId: number; name: string; email: string; amount: number; network: Network; number: string; accountName: string;
+  status: WithdrawalStatus; reason: string | null; reference: string | null; payoutDate: string; createdAt: string; processedAt: string | null; verified: boolean;
+};
+export type AdminPayoutMethod = { userId: number; name: string; email: string; network: Network; number: string; accountName: string; updatedAt: string };
+
+export function formatDay(isoDate: string): string {
+  return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+export function formatMomo(number: string): string {
+  return number.length === 10 ? `${number.slice(0, 4)} ${number.slice(4, 7)} ${number.slice(7)}` : number;
 }
