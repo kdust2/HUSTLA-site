@@ -56,3 +56,20 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   }
   return data as T;
 }
+
+export type AdminSummary = { pending: number; live: number; declined: number; users: number; resets: number; emailEnabled: boolean };
+export type AdminUser = { id: number; name: string; email: string; createdAt: string; campaigns: number; applications: number; isAdmin: boolean };
+export type ResetStatus = 'waiting' | 'link_ready' | 'expired' | 'done' | 'dismissed';
+export type ResetRequest = { id: number; name: string; email: string; createdAt: string; isAdmin: boolean; status: ResetStatus };
+
+export function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}

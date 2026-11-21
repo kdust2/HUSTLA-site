@@ -10,6 +10,8 @@ import { HowItWorksPage } from '@/pages/HowItWorksPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { HelpPage } from '@/pages/HelpPage';
 import { AdminPage } from '@/pages/AdminPage';
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
 
@@ -77,6 +79,7 @@ function AuthScreen({ mode }: { mode: 'in' | 'up' }) {
           <input id="auth-email" className="field" data-testid="input-auth-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
           <label htmlFor="auth-password" style={{ display: 'block', fontSize: 12, fontWeight: 700, margin: '12px 0 5px' }}>Password</label>
           <input id="auth-password" className="field" data-testid="input-auth-password" type="password" autoComplete={mode === 'in' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === 'up' ? 'At least 8 characters' : 'Your password'} required minLength={mode === 'up' ? 8 : 1} />
+          {mode === 'in' && <p style={{ margin: '10px 0 0', fontSize: 13, textAlign: 'right' }}><Link href="/forgot-password" data-testid="link-forgot-password">Forgot password?</Link></p>}
           {mode === 'up' && needsAdminCode && <>
             <label htmlFor="auth-admin-code" style={{ display: 'block', fontSize: 12, fontWeight: 700, margin: '12px 0 5px' }}>Admin setup code</label>
             <input id="auth-admin-code" className="field" data-testid="input-auth-admin-code" type="password" autoComplete="off" value={adminCode} onChange={(e) => setAdminCode(e.target.value)} />
@@ -100,6 +103,8 @@ function AppRoutes() {
       <Route path="/" component={HomeRedirect} />
       <Route path="/sign-in/*?" component={() => <AuthScreen mode="in" />} />
       <Route path="/sign-up/*?" component={() => <AuthScreen mode="up" />} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
       <Route path="/dashboard">{() => <Protected><DashboardPage /></Protected>}</Route>
       <Route path="/new-campaign">{() => <Protected><NewCampaignPage /></Protected>}</Route>
       <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>

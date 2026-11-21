@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCb) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
@@ -11,6 +11,7 @@ const CATEGORIES = [
 ];
 const COOKIE = 'hustla_session';
 const SESSION_DAYS = 30;
+const RESET_HOURS = 24;
 
 // Database access. On Render (or anywhere with DATABASE_URL) use a normal Postgres connection;
 // on Netlify fall back to Netlify Database. Connected lazily so a missing connection gives a clear 503.
@@ -79,6 +80,16 @@ function ensureSchema(): Promise<void> {
         value TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS password_resets (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash TEXT,
+        expires_at TIMESTAMPTZ,
+        used_at TIMESTAMPTZ,
+        dismissed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS password_resets_token_idx ON password_resets (token_hash)`;
       await sql`CREATE INDEX IF NOT EXISTS campaigns_status_idx ON campaigns (status, created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS campaigns_owner_idx ON campaigns (owner_id)`;
     })().catch((error) => { ready = null; throw error; });
@@ -112,6 +123,41 @@ const safeEqual = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
+const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+// Changing a password changes this value, which signs out any older sessions.
+const fingerprint = (passwordHash: string) => sha256(passwordHash).slice(0, 16);
+
+// Small in-memory attempt limiter (per server instance) to slow down guessing.
+const hits = new Map<string, number[]>();
+function throttle(key: string, max: number, windowMs: number) {
+  const now = Date.now();
+  const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (recent.length >= max) {
+    hits.set(key, recent);
+    throw new HttpError(429, 'too_many_attempts', 'Too many attempts. Please wait a few minutes and try again.');
+  }
+  recent.push(now);
+  hits.set(key, recent);
+  if (hits.size > 5000) for (const [k, v] of hits) if (!v.some((t) => now - t < windowMs)) hits.delete(k);
+}
+const clientIp = (req: Request) =>
+  (req.headers.get('x-forwarded-for') ?? req.headers.get('x-nf-client-connection-ip') ?? 'unknown').split(',')[0].trim();
+
+// Optional email through Resend. Without RESEND_API_KEY and MAIL_FROM, reset links are handed out by the admin instead.
+const emailEnabled = () => !!(process.env.RESEND_API_KEY && process.env.MAIL_FROM);
+async function sendMail(to: string, subject: string, text: string): Promise<boolean> {
+  if (!emailEnabled()) return false;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: process.env.MAIL_FROM, to: [to], subject, text }),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+const appBase = (req: Request) => (process.env.APP_URL ?? new URL(req.url).origin).replace(/\/$/, '');
+
 const adminEmails = () => (process.env.ADMIN_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
 const isAdminEmail = (email: string) => adminEmails().includes(email.toLowerCase());
 
@@ -129,14 +175,14 @@ async function verifyPassword(password: string, stored: string) {
 }
 const DUMMY_HASH = 's1$AAAAAAAAAAAAAAAAAAAAAA==$' + Buffer.alloc(64).toString('base64');
 
-async function sessionCookie(userId: number) {
+async function sessionCookie(userId: number, passwordHash: string) {
   const exp = Date.now() + SESSION_DAYS * 86400_000;
-  const payload = b64url(JSON.stringify({ u: userId, e: exp }));
+  const payload = b64url(JSON.stringify({ u: userId, e: exp, p: fingerprint(passwordHash) }));
   return `${COOKIE}=${payload}.${await sign(payload)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}`;
 }
 const clearCookie = () => `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 
-async function readSessionUserId(req: Request): Promise<number | null> {
+async function readSession(req: Request): Promise<{ u: number; p: string } | null> {
   const header = req.headers.get('cookie') ?? '';
   const match = header.split(/;\s*/).find((part) => part.startsWith(`${COOKIE}=`));
   if (!match) return null;
@@ -145,7 +191,7 @@ async function readSessionUserId(req: Request): Promise<number | null> {
   if (!payload || !mac || !safeEqual(mac, await sign(payload))) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return typeof data.u === 'number' && typeof data.e === 'number' && data.e > Date.now() ? data.u : null;
+    return typeof data.u === 'number' && typeof data.e === 'number' && typeof data.p === 'string' && data.e > Date.now() ? { u: data.u, p: data.p } : null;
   } catch { return null; }
 }
 
@@ -153,10 +199,10 @@ type User = { id: number; name: string; email: string; isAdmin: boolean };
 const publicUser = (row: any): User => ({ id: row.id, name: row.name, email: row.email, isAdmin: isAdminEmail(row.email) });
 
 async function currentUser(req: Request): Promise<User | null> {
-  const id = await readSessionUserId(req);
-  if (!id) return null;
-  const rows = rowsOf(await sql`SELECT id, name, email FROM users WHERE id = ${id}`);
-  return rows[0] ? publicUser(rows[0]) : null;
+  const session = await readSession(req);
+  if (!session) return null;
+  const rows = rowsOf(await sql`SELECT id, name, email, password_hash FROM users WHERE id = ${session.u}`);
+  return rows[0] && safeEqual(session.p, fingerprint(rows[0].password_hash)) ? publicUser(rows[0]) : null;
 }
 async function requireUser(req: Request) {
   const user = await currentUser(req);
@@ -229,19 +275,69 @@ async function route(req: Request, path: string[]): Promise<Response> {
       const existing = rowsOf(await sql`SELECT id FROM users WHERE email = ${email}`);
       if (existing.length) throw new HttpError(409, 'email_taken', 'An account with that email already exists. Try signing in.');
       const hash = await hashPassword(password);
-      const rows = rowsOf(await sql`INSERT INTO users (email, name, password_hash) VALUES (${email}, ${name}, ${hash}) RETURNING id, name, email`);
+      const rows = rowsOf(await sql`INSERT INTO users (email, name, password_hash) VALUES (${email}, ${name}, ${hash}) RETURNING id, name, email, password_hash`);
       const user = publicUser(rows[0]);
-      return json({ user }, 201, { 'set-cookie': await sessionCookie(user.id) });
+      return json({ user }, 201, { 'set-cookie': await sessionCookie(user.id, rows[0].password_hash) });
     }
     if (b === 'signin' && method === 'POST') {
       const data = await body(req);
       const email = (typeof data.email === 'string' ? data.email : '').trim().toLowerCase();
       const password = typeof data.password === 'string' ? data.password : '';
+      throttle(`signin:${clientIp(req)}:${email}`, 10, 15 * 60_000);
       const rows = rowsOf(await sql`SELECT id, name, email, password_hash FROM users WHERE email = ${email}`);
       const ok = await verifyPassword(password, rows[0]?.password_hash ?? DUMMY_HASH);
       if (!rows[0] || !ok) throw new HttpError(401, 'bad_credentials', 'Email or password is not right.');
       const user = publicUser(rows[0]);
-      return json({ user }, 200, { 'set-cookie': await sessionCookie(user.id) });
+      return json({ user }, 200, { 'set-cookie': await sessionCookie(user.id, rows[0].password_hash) });
+    }
+    if (b === 'forgot' && method === 'POST') {
+      throttle(`forgot:${clientIp(req)}`, 5, 15 * 60_000);
+      const data = await body(req);
+      const email = (typeof data.email === 'string' ? data.email : '').trim().toLowerCase();
+      // Same answer whether or not the account exists, so this cannot be used to find out who has an account.
+      const generic = { ok: true, emailEnabled: emailEnabled() };
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(generic);
+      const user = rowsOf(await sql`SELECT id, name, email FROM users WHERE email = ${email}`)[0];
+      if (user) {
+        const recent = rowsOf(await sql`SELECT id FROM password_resets WHERE user_id = ${user.id} AND used_at IS NULL AND dismissed_at IS NULL AND created_at > now() - interval '5 minutes'`);
+        if (!recent.length) {
+          const token = emailEnabled() ? randomBytes(32).toString('base64url') : null;
+          const expires = token ? new Date(Date.now() + RESET_HOURS * 3600_000).toISOString() : null;
+          await sql`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (${user.id}, ${token ? sha256(token) : null}, ${expires})`;
+          if (token) {
+            await sendMail(user.email, 'Reset your HUSTLA password',
+              `Hi ${user.name},\n\nUse this link to choose a new HUSTLA password. It works once and expires in ${RESET_HOURS} hours:\n\n${appBase(req)}/reset-password?token=${token}\n\nIf you did not ask for this, you can ignore this email.`);
+          }
+        }
+      }
+      return json(generic);
+    }
+    if (b === 'reset' && method === 'POST') {
+      throttle(`reset:${clientIp(req)}`, 10, 15 * 60_000);
+      const data = await body(req);
+      const password = typeof data.password === 'string' ? data.password : '';
+      if (password.length < 8 || password.length > 200) throw new HttpError(400, 'invalid', 'Password must be at least 8 characters.');
+      const token = typeof data.token === 'string' ? data.token.trim() : '';
+      let userId: number;
+      if (token) {
+        const found = rowsOf(await sql`SELECT user_id FROM password_resets WHERE token_hash = ${sha256(token)} AND used_at IS NULL AND dismissed_at IS NULL AND expires_at > now()`)[0];
+        if (!found) throw new HttpError(400, 'invalid_link', 'This reset link is invalid or has expired. Ask for a new one.');
+        userId = found.user_id;
+      } else {
+        // Admin recovery: the admin email plus the admin setup code.
+        const email = (typeof data.email === 'string' ? data.email : '').trim().toLowerCase();
+        const code = typeof data.adminCode === 'string' ? data.adminCode.trim() : '';
+        const expected = process.env.ADMIN_SETUP_CODE ?? '';
+        const user = email ? rowsOf(await sql`SELECT id FROM users WHERE email = ${email}`)[0] : null;
+        if (!expected || !user || !isAdminEmail(email) || !safeEqual(code, expected)) {
+          throw new HttpError(403, 'invalid_admin_recovery', 'The email or admin setup code is not right.');
+        }
+        userId = user.id;
+      }
+      const hash = await hashPassword(password);
+      await sql`UPDATE users SET password_hash = ${hash} WHERE id = ${userId}`;
+      await sql`UPDATE password_resets SET used_at = now() WHERE user_id = ${userId} AND used_at IS NULL`;
+      return json({ ok: true });
     }
     if (b === 'signout' && method === 'POST') {
       return json({ ok: true }, 200, { 'set-cookie': clearCookie() });
@@ -322,6 +418,59 @@ async function route(req: Request, path: string[]): Promise<Response> {
         WHERE id = ${id} AND status = 'pending_review' RETURNING *`);
       if (!rows[0]) throw new HttpError(409, 'not_pending', 'That campaign is no longer waiting for review.');
       return json({ campaign: campaignView(rows[0]) });
+    }
+  }
+
+  if (a === 'admin' && b === 'summary' && method === 'GET') {
+    await requireAdmin(req);
+    const row = rowsOf(await sql`SELECT
+      (SELECT COUNT(*) FROM campaigns WHERE status = 'pending_review') AS pending,
+      (SELECT COUNT(*) FROM campaigns WHERE status = 'live') AS live,
+      (SELECT COUNT(*) FROM campaigns WHERE status = 'declined') AS declined,
+      (SELECT COUNT(*) FROM users) AS users,
+      (SELECT COUNT(*) FROM password_resets WHERE used_at IS NULL AND dismissed_at IS NULL) AS resets`)[0];
+    return json({
+      pending: Number(row.pending), live: Number(row.live), declined: Number(row.declined),
+      users: Number(row.users), resets: Number(row.resets), emailEnabled: emailEnabled(),
+    });
+  }
+  if (a === 'admin' && b === 'users' && method === 'GET') {
+    await requireAdmin(req);
+    const rows = rowsOf(await sql`SELECT u.id, u.name, u.email, u.created_at,
+        (SELECT COUNT(*) FROM campaigns c WHERE c.owner_id = u.id) AS campaigns,
+        (SELECT COUNT(*) FROM applications a WHERE a.worker_id = u.id) AS applications
+      FROM users u ORDER BY u.created_at DESC LIMIT 500`);
+    return json({ users: rows.map((row) => ({
+      id: row.id, name: row.name, email: row.email, createdAt: row.created_at,
+      campaigns: Number(row.campaigns), applications: Number(row.applications), isAdmin: isAdminEmail(row.email),
+    })) });
+  }
+  if (a === 'admin' && b === 'resets') {
+    await requireAdmin(req);
+    if (!c && method === 'GET') {
+      const rows = rowsOf(await sql`SELECT r.id, r.created_at, r.token_hash, r.expires_at, r.used_at, r.dismissed_at, u.name, u.email
+        FROM password_resets r JOIN users u ON u.id = r.user_id ORDER BY r.created_at DESC LIMIT 100`);
+      const now = Date.now();
+      return json({ requests: rows.map((row) => ({
+        id: row.id, name: row.name, email: row.email, createdAt: row.created_at, isAdmin: isAdminEmail(row.email),
+        status: row.used_at ? 'done' : row.dismissed_at ? 'dismissed'
+          : row.token_hash ? (new Date(row.expires_at).getTime() > now ? 'link_ready' : 'expired') : 'waiting',
+      })) });
+    }
+    const id = Number(c);
+    if (c && Number.isInteger(id) && path[3] === 'link' && method === 'POST') {
+      const row = rowsOf(await sql`SELECT r.id, u.email FROM password_resets r JOIN users u ON u.id = r.user_id
+        WHERE r.id = ${id} AND r.used_at IS NULL AND r.dismissed_at IS NULL`)[0];
+      if (!row) throw new HttpError(404, 'not_found', 'That request is already closed.');
+      if (isAdminEmail(row.email)) throw new HttpError(400, 'admin_account', 'Admin accounts reset with the admin setup code, not a link.');
+      const token = randomBytes(32).toString('base64url');
+      const expires = new Date(Date.now() + RESET_HOURS * 3600_000).toISOString();
+      await sql`UPDATE password_resets SET token_hash = ${sha256(token)}, expires_at = ${expires} WHERE id = ${id}`;
+      return json({ link: `${appBase(req)}/reset-password?token=${token}`, expiresAt: expires });
+    }
+    if (c && Number.isInteger(id) && path[3] === 'dismiss' && method === 'POST') {
+      await sql`UPDATE password_resets SET dismissed_at = now() WHERE id = ${id} AND used_at IS NULL`;
+      return json({ ok: true });
     }
   }
 
