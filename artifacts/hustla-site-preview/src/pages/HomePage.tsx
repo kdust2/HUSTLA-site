@@ -3,6 +3,7 @@ import { ArrowRight, BadgeCheck } from 'lucide-react';
 import { categories } from '@/lib/data';
 import { useScrollReveal, delay, CountUp } from '@/lib/motion';
 import { Brand } from '@/components/layout';
+import { LegalLinks } from '@/components/LegalLinks';
 
 export function HomePage() {
   useScrollReveal();
@@ -62,7 +63,7 @@ export function HomePage() {
       <section className="home-section cta-wrap">
         <div className="cta-band reveal"><h2>Ready to make a move?</h2><Link className="btn btn-warm" href="/sign-up" data-testid="link-cta-sign-up">Create your account <ArrowRight size={16} /></Link></div>
       </section>
-      <footer className="public-footer"><Brand /><span>Built around real work in Ghana. All times are Ghana time (GMT).</span></footer>
+      <footer className="public-footer"><Brand /><span>Built around real work in Ghana. All times are Ghana time (GMT).</span><LegalLinks /></footer>
     </div>
   );
 }

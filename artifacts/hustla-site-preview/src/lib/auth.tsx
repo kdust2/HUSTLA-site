@@ -5,8 +5,8 @@ type Auth = {
   user: ApiUser | null;
   loading: boolean;
   isSignedIn: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (input: { name: string; email: string; password: string; adminCode?: string }) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<ApiUser>;
+  signUp: (input: { name: string; email: string; password: string; adminCode?: string }) => Promise<ApiUser>;
   signOut: () => Promise<void>;
 };
 
@@ -28,10 +28,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (email: string, password: string) => {
     const data = await api<{ user: ApiUser }>('/auth/signin', { body: { email, password } });
     setUser(data.user);
+    return data.user;
   }, []);
   const signUp = useCallback(async (input: { name: string; email: string; password: string; adminCode?: string }) => {
     const data = await api<{ user: ApiUser }>('/auth/signup', { body: input });
     setUser(data.user);
+    return data.user;
   }, []);
   const signOut = useCallback(async () => {
     try { await api('/auth/signout', { method: 'POST', body: {} }); } catch { /* cookie may already be gone */ }

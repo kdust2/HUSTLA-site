@@ -500,3 +500,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .admin-credit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 14px; }
 .admin-credit select.field { appearance:auto; }
 @media (max-width: 760px) { .admin-credit-grid { grid-template-columns:1fr; } }
+
+/* ---------- legal pages ---------- */
+.legal-links { display:flex; gap:6px 18px; flex-wrap:wrap; font-size:13px; }
+.legal-links a { color:#5b6574; text-decoration:none; }
+.legal-links a:hover { color:#2455d6; text-decoration:underline; }
+.legal-links.app-legal { margin-top:40px; padding-top:16px; border-top:1px solid #eeeae2; }
+.legal-links.legal-bottom { margin-top:36px; padding-top:18px; border-top:1px solid #e4e0d7; }
+.public-footer .legal-links { margin-left:auto; }
+.legal { max-width:760px; margin:0 auto; padding:36px 24px 80px; color:#1d293c; }
+.legal h1 { font:700 34px var(--app-font-mono); letter-spacing:-.05em; margin:6px 0 10px; }
+.legal-intro { font-size:16px; color:#4d596b; margin:0 0 26px; }
+.legal section { margin:0 0 22px; }
+.legal h2 { font:700 17px var(--app-font-mono); letter-spacing:-.03em; margin:0 0 8px; }
+.legal p, .legal li { font-size:15px; line-height:1.65; }
+.legal ul { padding-left:20px; display:grid; gap:6px; margin:8px 0; }
+.legal a { color:#2455d6; }

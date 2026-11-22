@@ -11,6 +11,7 @@ import { PricingPage } from '@/pages/PricingPage';
 import { HelpPage } from '@/pages/HelpPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { WalletPage } from '@/pages/WalletPage';
+import { TermsPage, PrivacyPage, RefundsPage, ComplaintsPage } from '@/pages/LegalPages';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -23,21 +24,24 @@ function Loading() {
   return <div className="auth-wrap"><div className="auth-panel"><p className="auth-caption" role="status">Loading…</p></div></div>;
 }
 
-function Protected({ children }: { children: ReactNode }) {
-  const { isSignedIn, loading } = useAuth();
+function Protected({ children, admin = false }: { children: ReactNode; admin?: boolean }) {
+  const { user, isSignedIn, loading } = useAuth();
   if (loading) return <Loading />;
-  return isSignedIn ? <>{children}</> : <Redirect to="/sign-in" />;
+  if (!isSignedIn) return <Redirect to="/sign-in" />;
+  // The admin account only uses the admin area; member pages are for member accounts.
+  if (user?.isAdmin && !admin) return <Redirect to="/admin" />;
+  return <>{children}</>;
 }
 
 function HomeRedirect() {
-  const { isSignedIn, loading } = useAuth();
+  const { user, isSignedIn, loading } = useAuth();
   if (loading) return <Loading />;
-  if (isSignedIn) return <Redirect to="/dashboard" />;
+  if (isSignedIn) return <Redirect to={user?.isAdmin ? '/admin' : '/dashboard'} />;
   return <HomePage />;
 }
 
 function AuthScreen({ mode }: { mode: 'in' | 'up' }) {
-  const { signIn, signUp, isSignedIn, loading } = useAuth();
+  const { signIn, signUp, user, isSignedIn, loading } = useAuth();
   const [, setLocation] = useLocation();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -47,16 +51,17 @@ function AuthScreen({ mode }: { mode: 'in' | 'up' }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (!loading && isSignedIn) return <Redirect to="/dashboard" />;
+  if (!loading && isSignedIn) return <Redirect to={user?.isAdmin ? '/admin' : '/dashboard'} />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     setBusy(true);
     try {
-      if (mode === 'in') await signIn(email.trim(), password);
-      else await signUp({ name: name.trim() || email.split('@')[0], email: email.trim(), password, adminCode: needsAdminCode ? adminCode : undefined });
-      setLocation('/dashboard');
+      const next = mode === 'in'
+        ? await signIn(email.trim(), password)
+        : await signUp({ name: name.trim() || email.split('@')[0], email: email.trim(), password, adminCode: needsAdminCode ? adminCode : undefined });
+      setLocation(next.isAdmin ? '/admin' : '/dashboard');
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'admin_code_required' || err.code === 'admin_code_invalid')) setNeedsAdminCode(true);
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
@@ -88,6 +93,7 @@ function AuthScreen({ mode }: { mode: 'in' | 'up' }) {
           </>}
           {error && <div className="notice" role="alert" style={{ marginTop: 14 }}>{error}</div>}
           <button type="submit" className="btn btn-primary" data-testid="button-auth-submit" disabled={busy} style={{ width: '100%', marginTop: 18 }}>{busy ? 'Please wait…' : mode === 'in' ? 'Sign in' : 'Create account'}</button>
+          {mode === 'up' && <p className="auth-caption" style={{ textAlign: 'center', margin: '14px 0 0' }}>By creating an account you agree to the <Link href="/terms" data-testid="link-signup-terms">Terms</Link> and <Link href="/privacy" data-testid="link-signup-privacy">Privacy policy</Link>.</p>}
           <p className="auth-caption" style={{ textAlign: 'center', marginBottom: 0 }}>
             {mode === 'in'
               ? <>New here? <Link href="/sign-up" data-testid="link-to-sign-up">Create an account</Link></>
@@ -113,7 +119,11 @@ function AppRoutes() {
       <Route path="/campaigns">{() => <Protected><CampaignsPage /></Protected>}</Route>
       <Route path="/businesses"><Redirect to="/campaigns" /></Route>
       <Route path="/wallet">{() => <Protected><WalletPage /></Protected>}</Route>
-      <Route path="/admin">{() => <Protected><AdminPage /></Protected>}</Route>
+      <Route path="/admin">{() => <Protected admin><AdminPage /></Protected>}</Route>
+      <Route path="/terms" component={TermsPage} />
+      <Route path="/privacy" component={PrivacyPage} />
+      <Route path="/refunds" component={RefundsPage} />
+      <Route path="/complaints" component={ComplaintsPage} />
       <Route path="/leaderboard">{() => <Protected><LeaderboardPage /></Protected>}</Route>
       <Route path="/creators"><Redirect to="/leaderboard" /></Route>
       <Route path="/how-it-works">{() => <Protected><HowItWorksPage /></Protected>}</Route>

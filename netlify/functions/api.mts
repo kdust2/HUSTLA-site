@@ -251,6 +251,12 @@ async function requireUser(req: Request) {
   if (!user) throw new HttpError(401, 'not_signed_in', 'Please sign in.');
   return user;
 }
+// Member features are for member accounts. The admin account only runs the platform.
+async function requireMember(req: Request) {
+  const user = await requireUser(req);
+  if (user.isAdmin) throw new HttpError(403, 'admin_account', 'The admin account only manages HUSTLA. Use a separate member account to try member features.');
+  return user;
+}
 async function requireAdmin(req: Request) {
   const user = await requireUser(req);
   if (!user.isAdmin) throw new HttpError(403, 'forbidden', 'Admins only.');
@@ -450,7 +456,7 @@ async function route(req: Request, path: string[]): Promise<Response> {
   // campaigns
   if (a === 'campaigns') {
     if (!b && method === 'POST') {
-      const user = await requireUser(req);
+      const user = await requireMember(req);
       const data = await body(req);
       const title = str(data.title, 8, 120, 'Title');
       const description = str(data.description, 10, 2000, 'Brief');
@@ -465,13 +471,13 @@ async function route(req: Request, path: string[]): Promise<Response> {
       return json({ campaign: campaignView(rows[0]) }, 201);
     }
     if (b === 'mine' && method === 'GET') {
-      const user = await requireUser(req);
+      const user = await requireMember(req);
       const rows = rowsOf(await sql`SELECT c.*, (SELECT COUNT(*) FROM applications a WHERE a.campaign_id = c.id) AS applicant_count
         FROM campaigns c WHERE c.owner_id = ${user.id} ORDER BY c.created_at DESC`);
       return json({ campaigns: rows.map(campaignView) });
     }
     if (b === 'live' && method === 'GET') {
-      const user = await requireUser(req);
+      const user = await requireMember(req);
       const rows = rowsOf(await sql`SELECT c.*,
           c.quantity - (SELECT COUNT(*) FROM applications a WHERE a.campaign_id = c.id AND a.status = 'accepted') AS spots_open,
           EXISTS (SELECT 1 FROM applications a WHERE a.campaign_id = c.id AND a.worker_id = ${user.id}) AS applied,
@@ -480,7 +486,7 @@ async function route(req: Request, path: string[]): Promise<Response> {
       return json({ campaigns: rows.map(campaignView) });
     }
     if (b && c === 'apply' && method === 'POST') {
-      const user = await requireUser(req);
+      const user = await requireMember(req);
       const id = Number(b);
       if (!Number.isInteger(id)) throw new HttpError(400, 'invalid', 'Bad campaign id.');
       const rows = rowsOf(await sql`SELECT id, owner_id, status FROM campaigns WHERE id = ${id}`);
@@ -493,7 +499,7 @@ async function route(req: Request, path: string[]): Promise<Response> {
 
   // wallet
   if (a === 'wallet') {
-    const user = await requireUser(req);
+    const user = await requireMember(req);
     if (!b && method === 'GET') return json(await walletView(user.id));
     if (b === 'payout-method' && method === 'PUT') {
       throttle(`payout-method:${user.id}`, 10, 3600_000);
@@ -562,7 +568,7 @@ async function route(req: Request, path: string[]): Promise<Response> {
 
   // applications
   if (a === 'applications' && b === 'mine' && method === 'GET') {
-    const user = await requireUser(req);
+    const user = await requireMember(req);
     const rows = rowsOf(await sql`SELECT campaign_id, status FROM applications WHERE worker_id = ${user.id}`);
     return json({ applications: rows.map((row) => ({ campaignId: row.campaign_id, status: row.status })) });
   }
@@ -725,6 +731,7 @@ async function route(req: Request, path: string[]): Promise<Response> {
     if (!['deposit', 'earning', 'pending', 'release'].includes(kind)) throw new HttpError(400, 'invalid', 'Pick what kind of credit this is.');
     const target = rowsOf(await sql`SELECT id, name FROM users WHERE email = ${email}`)[0];
     if (!target) throw new HttpError(404, 'not_found', 'No member has that email.');
+    if (isAdminEmail(email)) throw new HttpError(400, 'admin_account', 'The admin account does not have a wallet.');
     if (kind === 'release') {
       for (let attempt = 0; attempt < 4; attempt++) {
         const snap = await walletSnapshot(target.id, 'pending');

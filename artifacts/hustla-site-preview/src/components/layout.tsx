@@ -3,6 +3,7 @@ import { Link, useLocation } from 'wouter';
 import { Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useMode } from '@/lib/mode';
+import { LegalLinks } from '@/components/LegalLinks';
 import { useScrollReveal } from '@/lib/motion';
 
 export function Brand() {
@@ -44,7 +45,8 @@ export function AppShell({ children, title, showMode = true }: { children: React
   useScrollReveal();
   const [location] = useLocation();
   const { user, signOut } = useAuth();
-  const items = user?.isAdmin ? [...navItems.slice(0, 4), { href: '/admin', label: 'Admin', icon: ShieldCheck }, ...navItems.slice(4)] : navItems;
+  const items = user?.isAdmin ? [{ href: '/admin', label: 'Admin', icon: ShieldCheck }] : navItems;
+  showMode = showMode && !user?.isAdmin;
   const [menuOpen, setMenuOpen] = useState(false);
   const name = user?.name || 'HUSTLA member';
   const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -90,7 +92,7 @@ export function AppShell({ children, title, showMode = true }: { children: React
           </div>
         </header>
         {showMode && <ModeBand />}
-        <main className="content page-in" key={location}>{children}</main>
+        <main className="content page-in" key={location}>{children}<LegalLinks className="app-legal" /></main>
       </div>
     </div>
   );
