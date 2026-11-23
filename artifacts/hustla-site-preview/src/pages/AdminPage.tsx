@@ -10,7 +10,8 @@ import {
 import { AppShell, Header } from '@/components/layout';
 import { useAuth } from '@/lib/auth';
 
-type Tab = 'campaigns' | 'members' | 'resets' | 'payouts' | 'disputes';
+type Tab = 'home' | 'campaigns' | 'members' | 'resets' | 'payouts' | 'disputes';
+type PayView = 'deposits' | 'withdrawals' | 'numbers' | 'settings' | 'credit';
 const withdrawalFilters: { value: WithdrawalStatus; label: string }[] = [
   { value: 'requested', label: 'To pay' }, { value: 'paid', label: 'Paid' }, { value: 'rejected', label: 'Rejected' }, { value: 'cancelled', label: 'Cancelled' },
 ];
@@ -23,7 +24,7 @@ const creditKinds = [
 type Filter = CampaignStatus | 'all';
 
 const campaignFilters: { value: Filter; label: string }[] = [
-  { value: 'pending_review', label: 'Awaiting review' },
+  { value: 'pending_review', label: 'To review' },
   { value: 'live', label: 'Live' },
   { value: 'declined', label: 'Declined' },
   { value: 'all', label: 'All' },
@@ -35,7 +36,8 @@ const initials = (name: string) => name.split(' ').filter(Boolean).map((part) =>
 
 export function AdminPage() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>('campaigns');
+  const [tab, setTab] = useState<Tab>('home');
+  const [payView, setPayView] = useState<PayView>('withdrawals');
   const [filter, setFilter] = useState<Filter>('pending_review');
   const [query, setQuery] = useState('');
   const [summary, setSummary] = useState<AdminSummary | null>(null);
@@ -104,7 +106,11 @@ export function AdminPage() {
   }, []);
 
   useEffect(() => { if (isAdmin) void loadSummary(); }, [isAdmin, loadSummary]);
-  useEffect(() => { if (isAdmin) void loadTab(tab, filter, wdFilter); }, [isAdmin, tab, filter, wdFilter, disputeFilter, loadTab]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (tab === 'home') { setLoading(false); setError(''); return; }
+    void loadTab(tab, filter, wdFilter);
+  }, [isAdmin, tab, filter, wdFilter, disputeFilter, loadTab]);
 
   const needle = query.trim().toLowerCase();
   const shownCampaigns = useMemo(() => campaigns.filter((c) =>
@@ -114,10 +120,13 @@ export function AdminPage() {
 
   if (!isAdmin) return <Redirect to="/dashboard" />;
 
-  const openTab = (next: Tab, nextFilter?: Filter) => {
+  const openTab = (next: Tab, nextFilter?: Filter, pay?: PayView) => {
     setQuery('');
     setTab(next);
+    setPanel(null);
+    setDepPanel(null);
     if (nextFilter) setFilter(nextFilter);
+    if (pay) setPayView(pay);
   };
 
   const review = async (id: number, decision: 'approve' | 'decline', note?: string) => {
@@ -270,40 +279,47 @@ export function AdminPage() {
     return next;
   });
 
-  const stat = (label: string, value: number | undefined, hint: string, onClick: () => void, attention = false) => (
-    <button type="button" className={`admin-stat${attention ? ' attn' : ''}`} onClick={onClick} data-testid={`admin-stat-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
-      <span>{label}</span>
-      <strong>{value === undefined ? '–' : value}</strong>
-      <small>{hint}</small>
-    </button>
-  );
+  const todo = [
+    { key: 'campaigns', title: 'Campaigns to review', count: summary?.pending ?? 0, hint: 'Approve or decline them', clear: 'Nothing to review', open: () => openTab('campaigns', 'pending_review') },
+    { key: 'deposits', title: 'Deposits to confirm', count: summary?.deposits ?? 0, hint: 'Members say they paid you', clear: 'No deposits waiting', open: () => openTab('payouts', undefined, 'deposits') },
+    { key: 'withdrawals', title: 'Withdrawals to pay', count: summary?.withdrawals ?? 0, hint: 'Send the money, then mark it paid', clear: 'Nothing to pay', open: () => openTab('payouts', undefined, 'withdrawals') },
+    { key: 'numbers', title: 'Mobile money numbers to check', count: summary?.unverified ?? 0, hint: 'Check the name, then verify', clear: 'All checked', open: () => openTab('payouts', undefined, 'numbers') },
+    { key: 'disputes', title: 'Disputes to decide', count: summary?.disputes ?? 0, hint: 'The money is on hold', clear: 'No open disputes', open: () => openTab('disputes') },
+    { key: 'resets', title: 'Password reset requests', count: summary?.resets ?? 0, hint: 'Send them a reset link', clear: 'No requests', open: () => openTab('resets') },
+  ];
+  const waiting = todo.reduce((sum, item) => sum + item.count, 0);
+  const viewTitle = tab === 'campaigns' ? 'Campaigns' : tab === 'members' ? 'Members' : tab === 'resets' ? 'Password reset requests' : tab === 'disputes' ? 'Disputes'
+    : payView === 'deposits' ? 'Deposits to confirm' : payView === 'withdrawals' ? 'Withdrawals to pay' : payView === 'numbers' ? 'Mobile money numbers to check'
+    : payView === 'settings' ? 'Payment instructions' : 'Add money to a wallet';
 
   return (
     <AppShell title="Admin" showMode={false}>
-      <Header eyebrow="Admin" title="Run HUSTLA." description="Review campaigns, look after your members and help people back into their accounts." />
-
-      <div className="admin-stats">
-        {stat('Awaiting review', summary?.pending, summary?.pending ? 'Needs your decision' : 'All caught up', () => openTab('campaigns', 'pending_review'), !!summary?.pending)}
-        {stat('Live campaigns', summary?.live, 'Visible to workers', () => openTab('campaigns', 'live'))}
-        {stat('Members', summary?.users, 'Signed-up accounts', () => openTab('members'))}
-        {stat('Disputes', summary?.disputes, summary?.disputes ? 'Money is on hold' : 'None open', () => openTab('disputes'), !!summary?.disputes)}
-        {stat('Payouts', summary?.withdrawals, summary?.unverified ? `${summary.unverified} ${summary.unverified === 1 ? 'number' : 'numbers'} to verify` : summary?.withdrawals ? 'Waiting to be paid' : 'Nothing to pay', () => openTab('payouts'), !!(summary?.withdrawals || summary?.unverified))}
-        {stat('Password resets', summary?.resets, summary?.resets ? 'People waiting for help' : 'None open', () => openTab('resets'), !!summary?.resets)}
-      </div>
-
-      <div className="admin-tabs" role="tablist" aria-label="Admin sections">
-        <button type="button" role="tab" aria-selected={tab === 'campaigns'} className={tab === 'campaigns' ? 'on' : ''} data-testid="admin-tab-campaigns" onClick={() => openTab('campaigns')}>Campaigns</button>
-        <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'on' : ''} data-testid="admin-tab-members" onClick={() => openTab('members')}>Members</button>
-        <button type="button" role="tab" aria-selected={tab === 'payouts'} className={tab === 'payouts' ? 'on' : ''} data-testid="admin-tab-payouts" onClick={() => openTab('payouts')}>
-          Payouts{summary && summary.withdrawals + summary.unverified + summary.deposits > 0 ? <em className="admin-badge">{summary.withdrawals + summary.unverified + summary.deposits}</em> : null}
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'disputes'} className={tab === 'disputes' ? 'on' : ''} data-testid="admin-tab-disputes" onClick={() => openTab('disputes')}>
-          Disputes{summary?.disputes ? <em className="admin-badge">{summary.disputes}</em> : null}
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'resets'} className={tab === 'resets' ? 'on' : ''} data-testid="admin-tab-resets" onClick={() => openTab('resets')}>
-          Password resets{summary?.resets ? <em className="admin-badge">{summary.resets}</em> : null}
-        </button>
-      </div>
+      {tab === 'home' ? (
+        <>
+          <Header eyebrow="Admin" title="What needs you today." description={summary ? (waiting ? `${waiting} ${waiting === 1 ? 'thing is' : 'things are'} waiting for you. Tap one to deal with it.` : 'All clear. Nothing is waiting for you.') : 'Loading…'} />
+          <div className="todo-grid" data-testid="todo-grid">
+            {todo.map((item) => (
+              <button key={item.key} type="button" className={`todo-card${item.count ? ' attn' : ''}`} data-testid={`todo-${item.key}`} onClick={item.open}>
+                <strong>{summary ? item.count : '–'}</strong>
+                <span><b>{item.title}</b><small>{item.count ? item.hint : item.clear}</small></span>
+              </button>
+            ))}
+          </div>
+          <h2 className="admin-h">Other things you can do</h2>
+          <section className="surface more-list">
+            <button type="button" className="more-row" data-testid="more-members" onClick={() => openTab('members')}><span>Members</span><small>{summary ? `${summary.users} signed up` : ''}</small></button>
+            <button type="button" className="more-row" data-testid="more-campaigns" onClick={() => openTab('campaigns', 'all')}><span>All campaigns</span><small>{summary ? `${summary.live} live` : ''}</small></button>
+            <button type="button" className="more-row" data-testid="more-settings" onClick={() => openTab('payouts', undefined, 'settings')}><span>Payment instructions</span><small>What members see when they add funds</small></button>
+            <button type="button" className="more-row" data-testid="more-credit" onClick={() => openTab('payouts', undefined, 'credit')}><span>Add money to a wallet</span><small>Record a deposit or earnings by hand</small></button>
+            <div className="more-row static"><span>HUSTLA fees earned</span><small data-testid="admin-fees-home">{summary ? gh(summary.fees) : ''}</small></div>
+          </section>
+        </>
+      ) : (
+        <div className="admin-back">
+          <button type="button" className="btn btn-small" data-testid="admin-back" onClick={() => openTab('home')}>← To-do list</button>
+          <h2 data-testid="admin-view-title">{viewTitle}</h2>
+        </div>
+      )}
 
       {(tab === 'campaigns' || tab === 'members') && (
         <div className="admin-toolbar">
@@ -507,12 +523,9 @@ export function AdminPage() {
 
       {!loading && !error && tab === 'payouts' && (
         <>
-          <div className="admin-note">
-            <Landmark size={18} aria-hidden="true" />
-            <p>Withdrawals are paid on Tuesdays and Fridays. Send each one by mobile money, then mark it paid. A rejected withdrawal goes straight back to the member’s wallet.</p>
-          </div>
 
-          <h2 className="admin-h">Deposits to confirm</h2>
+          {payView === 'deposits' && (
+          <>
           {deposits.length === 0 ? (
             <p className="wallet-empty">No deposits are waiting. Check your mobile money account, then confirm each one here.</p>
           ) : (
@@ -545,7 +558,11 @@ export function AdminPage() {
             </section>
           )}
 
-          <h2 className="admin-h">Payment instructions for members</h2>
+          </>
+          )}
+
+          {payView === 'settings' && (
+          <>
           <div className="surface admin-credit">
             <p className="wallet-help">This text is shown to members in their wallet under “Add funds”. Include your mobile money number and what to use as the reference.</p>
             <textarea className="field" data-testid="input-deposit-instructions" rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} maxLength={800} placeholder="e.g. Send to MoMo 0244 000 000 (HUSTLA). Use your email as the reference." />
@@ -553,7 +570,11 @@ export function AdminPage() {
             {summary && <p className="wallet-help" style={{ marginTop: 14 }} data-testid="admin-fees">HUSTLA fees earned so far: <strong>{gh(summary.fees)}</strong></p>}
           </div>
 
-          <h2 className="admin-h">Withdrawal requests</h2>
+          </>
+          )}
+
+          {payView === 'withdrawals' && (
+          <>
           <div className="chips admin-filter" role="group" aria-label="Filter withdrawals">
             {withdrawalFilters.map((item) => (
               <button key={item.value} type="button" className={`chip ${wdFilter === item.value ? 'on' : ''}`} aria-pressed={wdFilter === item.value} data-testid={`chip-wd-${item.value}`} onClick={() => { setPanel(null); setWdFilter(item.value); }}>{item.label}</button>
@@ -601,7 +622,11 @@ export function AdminPage() {
             </section>
           )}
 
-          <h2 className="admin-h">Numbers to verify</h2>
+          </>
+          )}
+
+          {payView === 'numbers' && (
+          <>
           {methods.length === 0 ? (
             <p className="wallet-empty">Every saved mobile money number is verified.</p>
           ) : (
@@ -624,7 +649,11 @@ export function AdminPage() {
             </section>
           )}
 
-          <h2 className="admin-h">Add money to a wallet</h2>
+          </>
+          )}
+
+          {payView === 'credit' && (
+          <>
           <form className="surface admin-credit" onSubmit={submitCredit}>
             <p className="wallet-help">Use this to record a deposit you have confirmed, or earnings you have approved, until online payments are connected. Every entry is saved in the member’s history.</p>
             <div className="admin-credit-grid">
@@ -638,6 +667,9 @@ export function AdminPage() {
             </div>
             <button type="submit" className="btn btn-primary" data-testid="button-credit-submit" disabled={crediting} style={{ marginTop: 16 }}>{crediting ? 'Saving…' : 'Update wallet'}</button>
           </form>
+          </>
+          )}
+
         </>
       )}
 
