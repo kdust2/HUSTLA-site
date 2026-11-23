@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, Wallet, X, Zap } from 'lucide-react';
+import { Bell, Briefcase, CircleHelp, Compass, CreditCard, Home, LogOut, Megaphone, Menu, ShieldCheck, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { useMode } from '@/lib/mode';
 import { LegalLinks } from '@/components/LegalLinks';
+import { api } from '@/lib/api';
 import { useScrollReveal } from '@/lib/motion';
 
 export function Brand() {
@@ -20,6 +21,24 @@ export const navItems = [
   { href: '/pricing', label: 'Pricing', icon: CreditCard },
   { href: '/help', label: 'Help', icon: CircleHelp },
 ];
+
+export function NotificationBell() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const load = () => { api<{ unread: number }>('/notifications').then((d) => { if (active) setCount(d.unread); }).catch(() => undefined); };
+    load();
+    const timer = window.setInterval(load, 60000);
+    window.addEventListener('hustla-notifications', load);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('hustla-notifications', load); };
+  }, []);
+  return (
+    <Link href="/notifications" className="bell" aria-label={count ? `Notifications, ${count} unread` : 'Notifications'} data-testid="link-notifications">
+      <Bell size={18} aria-hidden="true" />
+      {count > 0 && <span className="bell-badge" data-testid="bell-count">{count > 9 ? '9+' : count}</span>}
+    </Link>
+  );
+}
 
 export function ModeSwitch() {
   const { mode, setMode } = useMode();
@@ -88,6 +107,7 @@ export function AppShell({ children, title, showMode = true }: { children: React
           <div className="top-actions">
             <span className="welcome">Good work starts here, {name.split(' ')[0]}.</span>
             {showMode && <ModeSwitch />}
+            <NotificationBell />
             <div className="avatar top-avatar" aria-hidden="true">{initials}</div>
           </div>
         </header>

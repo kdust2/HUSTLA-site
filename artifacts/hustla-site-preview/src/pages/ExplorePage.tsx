@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Search } from 'lucide-react';
+import { Check, Flag, Search } from 'lucide-react';
 import { categories, gh } from '@/lib/data';
 import { delay } from '@/lib/motion';
 import { api, type ApiCampaign } from '@/lib/api';
@@ -12,6 +12,8 @@ export function ExplorePage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [toast, setToast] = useState('');
+  const [reporting, setReporting] = useState<number | null>(null);
+  const [reportText, setReportText] = useState('');
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2600); };
 
   const load = useCallback(async () => {
@@ -36,9 +38,20 @@ export function ExplorePage() {
     try {
       await api(`/campaigns/${id}/apply`, { method: 'POST', body: {} });
       setCampaigns((prev) => prev.map((task) => (task.id === id ? { ...task, applied: true } : task)));
-      notify('Application sent. The publisher has 24 hours to respond.');
+      notify('Application sent. The publisher has 24 hours to reply.');
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not send your application.');
+    }
+  };
+
+  const sendReport = async (id: number) => {
+    try {
+      await api(`/campaigns/${id}/report`, { body: { reason: reportText } });
+      notify('Thanks. HUSTLA will look at this campaign.');
+      setReporting(null);
+      setReportText('');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not send your report.');
     }
   };
 
@@ -61,10 +74,18 @@ export function ExplorePage() {
                 <span className="category">{task.category}</span>
                 <h3>{task.title}</h3>
                 <p className="task-desc">{task.description}</p>
+                <p className="task-desc"><strong>Deliver:</strong> {task.deliverable}</p>
                 <p className="task-meta">
-                  <span className={(task.daysLeft ?? 0) <= 2 ? 'urgent' : ''}>{task.daysLeft} {task.daysLeft === 1 ? 'day' : 'days'} left</span>
+                  <span>{task.days} {task.days === 1 ? 'day' : 'days'} to finish once accepted</span>
                   <span>{task.spotsOpen} {task.spotsOpen === 1 ? 'spot' : 'spots'} open</span>
                 </p>
+                {!task.isOwn && (reporting === task.id ? (
+                  <div className="report-row">
+                    <input className="field" data-testid={`input-report-${task.id}`} placeholder="What is wrong with this campaign?" value={reportText} onChange={(e) => setReportText(e.target.value)} maxLength={300} />
+                    <button type="button" className="btn btn-small btn-danger" data-testid={`button-send-report-${task.id}`} disabled={reportText.trim().length < 5} onClick={() => void sendReport(task.id)}>Report</button>
+                    <button type="button" className="btn btn-small" onClick={() => { setReporting(null); setReportText(''); }}>Cancel</button>
+                  </div>
+                ) : <button type="button" className="report-link" data-testid={`button-report-${task.id}`} onClick={() => { setReporting(task.id); setReportText(''); }}><Flag size={12} aria-hidden="true" /> Report</button>)}
               </div>
               <div className="task-pay">
                 <div className="pay-amount"><strong>{gh(task.reward)}</strong><small>Worker receives</small></div>

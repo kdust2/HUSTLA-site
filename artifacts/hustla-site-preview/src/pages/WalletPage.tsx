@@ -8,6 +8,7 @@ import { useMode } from '@/lib/mode';
 const kindLabel: Record<string, string> = {
   deposit: 'Deposit', earning: 'Earnings', pending: 'Pending earnings', release: 'Earnings cleared',
   withdrawal_request: 'Withdrawal requested', withdrawal_cancel: 'Withdrawal cancelled', withdrawal_reject: 'Withdrawal returned',
+  campaign_reserve: 'Reserved for a campaign', campaign_refund: 'Campaign refund', task_settled: 'Task paid', task_refund: 'Task refund',
 };
 const bucketLabel: Record<string, string> = { available: 'Available funds', reserved: 'Reserved', pending: 'Pending', withdrawable: 'Withdrawable' };
 const statusText: Record<WithdrawalStatus, string> = { requested: 'In the next payout', paid: 'Paid', rejected: 'Returned to wallet', cancelled: 'Cancelled' };
@@ -26,6 +27,12 @@ export function WalletPage() {
   const [accountName, setAccountName] = useState('');
   const [savingMethod, setSavingMethod] = useState(false);
   const [methodError, setMethodError] = useState('');
+
+  // add funds form
+  const [depositAmount, setDepositAmount] = useState('');
+  const [depositRef, setDepositRef] = useState('');
+  const [depositing, setDepositing] = useState(false);
+  const [depositError, setDepositError] = useState('');
 
   // withdraw form
   const [amount, setAmount] = useState('');
@@ -107,6 +114,23 @@ export function WalletPage() {
       await load();
     } finally {
       setWithdrawing(false);
+    }
+  };
+
+  const sendDeposit = async (event: FormEvent) => {
+    event.preventDefault();
+    setDepositError('');
+    setDepositing(true);
+    try {
+      const data = await api<Wallet>('/wallet/deposits', { body: { amount: Number(depositAmount), reference: depositRef } });
+      setWallet(data);
+      setDepositAmount('');
+      setDepositRef('');
+      notify('Thanks. HUSTLA will confirm your deposit and add it to your available funds.');
+    } catch (err) {
+      setDepositError(err instanceof Error ? err.message : 'Could not send that.');
+    } finally {
+      setDepositing(false);
     }
   };
 
@@ -214,6 +238,30 @@ export function WalletPage() {
           )}
         </section>
       </div>
+
+      <section className="surface wallet-panel" data-testid="add-funds">
+        <div className="surface-head"><h2>Add funds</h2></div>
+        <p className="wallet-help">Publishers need available funds to start a campaign. Pay HUSTLA by mobile money using the details below, then tell us what you sent. The minimum deposit is {gh(wallet.minDeposit)}.</p>
+        <div className="admin-note" data-testid="deposit-instructions"><p style={{ whiteSpace: 'pre-wrap' }}>{wallet.depositInstructions || 'Payment details will appear here soon. Please check back or contact HUSTLA.'}</p></div>
+        <form onSubmit={sendDeposit} className="wallet-form">
+          <div className="deposit-grid">
+            <div><label htmlFor="deposit-amount" className="auth-label">Amount you sent (GH₵)</label><input id="deposit-amount" className="field" data-testid="input-deposit-amount" inputMode="decimal" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} placeholder={`At least ${wallet.minDeposit}`} /></div>
+            <div><label htmlFor="deposit-ref" className="auth-label">Payment reference</label><input id="deposit-ref" className="field" data-testid="input-deposit-reference" value={depositRef} onChange={(e) => setDepositRef(e.target.value)} placeholder="Transaction ID from your SMS" maxLength={80} /></div>
+          </div>
+          {depositError && <div className="notice" role="alert">{depositError}</div>}
+          <button type="submit" className="btn btn-primary" data-testid="button-send-deposit" disabled={depositing || !depositAmount || depositRef.trim().length < 3}>{depositing ? 'Sending…' : 'I have paid'}</button>
+        </form>
+        {wallet.deposits.length > 0 && (
+          <div className="deposit-list" data-testid="deposit-list">
+            {wallet.deposits.map((d) => (
+              <div className="wallet-row" key={d.id} style={{ paddingInline: 0 }}>
+                <div className="wallet-row-main"><strong>{gh(d.amount)}</strong><small>Ref {d.reference} · {timeAgo(d.createdAt)}{d.note ? ` · ${d.note}` : ''}</small></div>
+                <span className={`pill ${d.status === 'confirmed' ? 'pill-live' : d.status === 'rejected' ? 'pill-declined' : 'pill-pending_review'}`}>{d.status === 'requested' ? 'Waiting for HUSTLA' : d.status === 'confirmed' ? 'Confirmed' : 'Not confirmed'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="surface wallet-list" data-testid="withdrawal-list">
         <div className="surface-head"><h2>Withdrawals</h2></div>

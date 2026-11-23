@@ -11,6 +11,9 @@ import { PricingPage } from '@/pages/PricingPage';
 import { HelpPage } from '@/pages/HelpPage';
 import { AdminPage } from '@/pages/AdminPage';
 import { WalletPage } from '@/pages/WalletPage';
+import { CampaignDetailPage } from '@/pages/CampaignDetailPage';
+import { TaskPage } from '@/pages/TaskPage';
+import { NotificationsPage } from '@/pages/NotificationsPage';
 import { TermsPage, PrivacyPage, RefundsPage, ComplaintsPage } from '@/pages/LegalPages';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
@@ -118,6 +121,9 @@ function AppRoutes() {
       <Route path="/explore">{() => <Protected><ExplorePage /></Protected>}</Route>
       <Route path="/campaigns">{() => <Protected><CampaignsPage /></Protected>}</Route>
       <Route path="/businesses"><Redirect to="/campaigns" /></Route>
+      <Route path="/campaigns/:id">{() => <Protected><CampaignDetailPage /></Protected>}</Route>
+      <Route path="/tasks/:id">{() => <Protected><TaskPage /></Protected>}</Route>
+      <Route path="/notifications">{() => <Protected admin><NotificationsPage /></Protected>}</Route>
       <Route path="/wallet">{() => <Protected><WalletPage /></Protected>}</Route>
       <Route path="/admin">{() => <Protected admin><AdminPage /></Protected>}</Route>
       <Route path="/terms" component={TermsPage} />

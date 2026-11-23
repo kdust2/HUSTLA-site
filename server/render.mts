@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import handler from '../netlify/functions/api.mts';
+import handler, { runSweep } from '../netlify/functions/api.mts';
 
 const root = path.resolve(process.env.STATIC_DIR ?? 'artifacts/hustla-site-preview/dist/public');
 const port = Number(process.env.PORT ?? 10000);
@@ -76,3 +76,6 @@ http.createServer(async (req, res) => {
     res.end('Server error');
   }
 }).listen(port, () => console.log(`HUSTLA listening on ${port}, serving ${root}`));
+
+// Deadlines, expiries, reminders and automatic approvals also run on a timer, so they fire even when nobody is visiting.
+setInterval(() => { runSweep().catch((error) => console.error('timed sweep failed', error instanceof Error ? error.message : error)); }, 5 * 60_000);

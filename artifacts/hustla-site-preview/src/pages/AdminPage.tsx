@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Redirect } from 'wouter';
-import { Check, Copy, KeyRound, Landmark, MessageCircle, Search, Users, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Landmark, MessageCircle, Scale, Search, Users, X } from 'lucide-react';
 import { gh } from '@/lib/data';
 import {
   api, formatDay, formatMomo, networkLabel, statusLabel, timeAgo,
-  type AdminPayoutMethod, type AdminSummary, type AdminUser, type AdminWithdrawal, type ApiCampaign, type CampaignStatus,
+  formatWhen, type AdminDeposit, type AdminDispute, type AdminDisputeDetail, type AdminPayoutMethod, type AdminSummary, type AdminUser, type AdminWithdrawal, type ApiCampaign, type CampaignStatus,
   type ResetRequest, type ResetStatus, type WithdrawalStatus,
 } from '@/lib/api';
 import { AppShell, Header } from '@/components/layout';
 import { useAuth } from '@/lib/auth';
 
-type Tab = 'campaigns' | 'members' | 'resets' | 'payouts';
+type Tab = 'campaigns' | 'members' | 'resets' | 'payouts' | 'disputes';
 const withdrawalFilters: { value: WithdrawalStatus; label: string }[] = [
   { value: 'requested', label: 'To pay' }, { value: 'paid', label: 'Paid' }, { value: 'rejected', label: 'Rejected' }, { value: 'cancelled', label: 'Cancelled' },
 ];
@@ -53,6 +53,16 @@ export function AdminPage() {
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
   const [confirmDecline, setConfirmDecline] = useState<number | null>(null);
+  const [declineNote, setDeclineNote] = useState('');
+  const [deposits, setDeposits] = useState<AdminDeposit[]>([]);
+  const [depPanel, setDepPanel] = useState<{ id: number; mode: 'reject' } | null>(null);
+  const [depNote, setDepNote] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [disputes, setDisputes] = useState<AdminDispute[]>([]);
+  const [disputeFilter, setDisputeFilter] = useState<'open' | 'resolved'>('open');
+  const [openDispute, setOpenDispute] = useState<number | null>(null);
+  const [disputeDetail, setDisputeDetail] = useState<AdminDisputeDetail | null>(null);
+  const [resolve, setResolve] = useState({ decision: 'release', amount: '', note: '' });
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [links, setLinks] = useState<Record<number, { link: string; name: string; expiresAt: string }>>({});
   const [copied, setCopied] = useState<number | null>(null);
@@ -77,7 +87,14 @@ export function AdminPage() {
         ]);
         setWithdrawals(w.withdrawals);
         setMethods(m.methods);
+        const [dep, set] = await Promise.all([
+          api<{ deposits: AdminDeposit[] }>('/admin/deposits?status=requested'),
+          api<{ depositInstructions: string }>('/admin/settings'),
+        ]);
+        setDeposits(dep.deposits);
+        setInstructions(set.depositInstructions);
       }
+      if (which === 'disputes') setDisputes((await api<{ disputes: AdminDispute[] }>(`/admin/disputes?status=${disputeFilter}`)).disputes);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load this section.');
@@ -87,7 +104,7 @@ export function AdminPage() {
   }, []);
 
   useEffect(() => { if (isAdmin) void loadSummary(); }, [isAdmin, loadSummary]);
-  useEffect(() => { if (isAdmin) void loadTab(tab, filter, wdFilter); }, [isAdmin, tab, filter, wdFilter, loadTab]);
+  useEffect(() => { if (isAdmin) void loadTab(tab, filter, wdFilter); }, [isAdmin, tab, filter, wdFilter, disputeFilter, loadTab]);
 
   const needle = query.trim().toLowerCase();
   const shownCampaigns = useMemo(() => campaigns.filter((c) =>
@@ -103,12 +120,14 @@ export function AdminPage() {
     if (nextFilter) setFilter(nextFilter);
   };
 
-  const review = async (id: number, decision: 'approve' | 'decline') => {
+  const review = async (id: number, decision: 'approve' | 'decline', note?: string) => {
+    if (decision === 'decline' && (note ?? '').trim().length < 3) { notify('Give the publisher a reason (at least 3 characters).'); return; }
     setBusyId(id);
     try {
-      await api(`/admin/campaigns/${id}/review`, { body: { decision } });
-      notify(decision === 'approve' ? 'Approved. The campaign is live now.' : 'Campaign declined.');
+      await api(`/admin/campaigns/${id}/review`, { body: { decision, note } });
+      notify(decision === 'approve' ? 'Approved. The campaign is live now.' : 'Campaign declined. The publisher has their money back.');
       setConfirmDecline(null);
+      setDeclineNote('');
       await Promise.all([loadTab('campaigns', filter), loadSummary()]);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not save that decision.');
@@ -195,6 +214,56 @@ export function AdminPage() {
     }
   };
 
+  const settleDeposit = async (d: AdminDeposit, mode: 'confirm' | 'reject') => {
+    if (mode === 'reject' && depNote.trim().length < 3) { notify('Give the member a reason (at least 3 characters).'); return; }
+    setBusyId(d.id);
+    try {
+      await api(`/admin/deposits/${d.id}/${mode}`, { body: mode === 'reject' ? { note: depNote.trim() } : {} });
+      notify(mode === 'confirm' ? `Confirmed. ${gh(d.amount)} added to ${d.name}'s available funds.` : 'Deposit rejected.');
+      setDepPanel(null);
+      setDepNote('');
+      await refreshPayouts();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not save that.');
+      await refreshPayouts();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const saveInstructions = async () => {
+    try {
+      await api('/admin/settings', { method: 'PUT', body: { depositInstructions: instructions } });
+      notify('Payment instructions saved. Members see them in their wallet.');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not save the instructions.');
+    }
+  };
+
+  const showDispute = async (id: number) => {
+    if (openDispute === id) { setOpenDispute(null); setDisputeDetail(null); return; }
+    setOpenDispute(id);
+    setDisputeDetail(null);
+    setResolve({ decision: 'release', amount: '', note: '' });
+    try { setDisputeDetail(await api<AdminDisputeDetail>(`/admin/disputes/${id}`)); }
+    catch (err) { notify(err instanceof Error ? err.message : 'Could not load that dispute.'); }
+  };
+
+  const decideDispute = async (d: AdminDispute) => {
+    setBusyId(d.id);
+    try {
+      await api(`/admin/disputes/${d.id}/resolve`, { body: { decision: resolve.decision, workerAmount: resolve.decision === 'split' ? Number(resolve.amount) : undefined, note: resolve.note.trim() } });
+      notify('Decision saved. Both sides have been told and the money has moved.');
+      setOpenDispute(null);
+      setDisputeDetail(null);
+      await Promise.all([loadTab('disputes', filter), loadSummary()]);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not save that decision.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const toggleBrief = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -217,6 +286,7 @@ export function AdminPage() {
         {stat('Awaiting review', summary?.pending, summary?.pending ? 'Needs your decision' : 'All caught up', () => openTab('campaigns', 'pending_review'), !!summary?.pending)}
         {stat('Live campaigns', summary?.live, 'Visible to workers', () => openTab('campaigns', 'live'))}
         {stat('Members', summary?.users, 'Signed-up accounts', () => openTab('members'))}
+        {stat('Disputes', summary?.disputes, summary?.disputes ? 'Money is on hold' : 'None open', () => openTab('disputes'), !!summary?.disputes)}
         {stat('Payouts', summary?.withdrawals, summary?.unverified ? `${summary.unverified} ${summary.unverified === 1 ? 'number' : 'numbers'} to verify` : summary?.withdrawals ? 'Waiting to be paid' : 'Nothing to pay', () => openTab('payouts'), !!(summary?.withdrawals || summary?.unverified))}
         {stat('Password resets', summary?.resets, summary?.resets ? 'People waiting for help' : 'None open', () => openTab('resets'), !!summary?.resets)}
       </div>
@@ -225,7 +295,10 @@ export function AdminPage() {
         <button type="button" role="tab" aria-selected={tab === 'campaigns'} className={tab === 'campaigns' ? 'on' : ''} data-testid="admin-tab-campaigns" onClick={() => openTab('campaigns')}>Campaigns</button>
         <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'on' : ''} data-testid="admin-tab-members" onClick={() => openTab('members')}>Members</button>
         <button type="button" role="tab" aria-selected={tab === 'payouts'} className={tab === 'payouts' ? 'on' : ''} data-testid="admin-tab-payouts" onClick={() => openTab('payouts')}>
-          Payouts{summary && summary.withdrawals + summary.unverified > 0 ? <em className="admin-badge">{summary.withdrawals + summary.unverified}</em> : null}
+          Payouts{summary && summary.withdrawals + summary.unverified + summary.deposits > 0 ? <em className="admin-badge">{summary.withdrawals + summary.unverified + summary.deposits}</em> : null}
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'disputes'} className={tab === 'disputes' ? 'on' : ''} data-testid="admin-tab-disputes" onClick={() => openTab('disputes')}>
+          Disputes{summary?.disputes ? <em className="admin-badge">{summary.disputes}</em> : null}
         </button>
         <button type="button" role="tab" aria-selected={tab === 'resets'} className={tab === 'resets' ? 'on' : ''} data-testid="admin-tab-resets" onClick={() => openTab('resets')}>
           Password resets{summary?.resets ? <em className="admin-badge">{summary.resets}</em> : null}
@@ -272,26 +345,30 @@ export function AdminPage() {
                   <h3>{c.title}</h3>
                   <p className={`admin-brief${open || !long ? '' : ' clamp'}`}>{c.description}</p>
                   {long && <button type="button" className="admin-link" onClick={() => toggleBrief(c.id)}>{open ? 'Show less' : 'Read full brief'}</button>}
+                  {c.deliverable && <p className="admin-brief"><strong>Deliverable:</strong> {c.deliverable}</p>}
+                  {c.criteria && <p className="admin-brief"><strong>Judged on:</strong> {c.criteria}</p>}
                   <dl className="admin-facts">
                     <div><dt>Tasks</dt><dd>{c.quantity}</dd></div>
                     <div><dt>Reward each</dt><dd>{gh(c.reward)}</dd></div>
-                    <div><dt>Total budget</dt><dd>{gh(c.quantity * c.reward)}</dd></div>
-                    <div><dt>Applicants</dt><dd>{c.applicantCount ?? 0}</dd></div>
+                    <div><dt>{c.funded ? 'Funded (with fee)' : 'Budget'}</dt><dd data-testid={`admin-budget-${c.id}`}>{gh(c.budget)}</dd></div>
+                    <div><dt>Days to finish</dt><dd>{c.days}</dd></div>
                   </dl>
+                  {!c.funded && <p className="admin-hint warn" style={{ paddingLeft: 0 }}>This campaign was created before funding was required, so no money is reserved for it.</p>}
+                  {!!c.reportCount && <p className="admin-hint warn" style={{ paddingLeft: 0 }} data-testid={`admin-reports-${c.id}`}>Reported by {c.reportCount} {c.reportCount === 1 ? 'member' : 'members'}</p>}
                   <div className="admin-card-foot">
                     <div className="admin-person">
                       <span className="avatar" aria-hidden="true">{initials(c.ownerName ?? '')}</span>
                       <span><strong>{c.ownerName}</strong><small>{c.ownerEmail}</small></span>
                     </div>
                     {c.status === 'pending_review' && (confirmDecline === c.id ? (
-                      <div className="admin-actions" role="group" aria-label="Confirm decline">
-                        <span className="admin-confirm">Decline this campaign?</span>
-                        <button type="button" className="btn btn-small" data-testid={`button-cancel-decline-${c.id}`} disabled={busyId === c.id} onClick={() => setConfirmDecline(null)}>Keep</button>
-                        <button type="button" className="btn btn-small btn-danger" data-testid={`button-confirm-decline-${c.id}`} disabled={busyId === c.id} onClick={() => void review(c.id, 'decline')}>Yes, decline</button>
+                      <div className="admin-actions admin-decline" role="group" aria-label="Confirm decline">
+                        <input className="field" data-testid={`input-decline-note-${c.id}`} placeholder="Reason for the publisher (required)" value={declineNote} onChange={(e) => setDeclineNote(e.target.value)} maxLength={300} />
+                        <button type="button" className="btn btn-small" data-testid={`button-cancel-decline-${c.id}`} disabled={busyId === c.id} onClick={() => { setConfirmDecline(null); setDeclineNote(''); }}>Keep</button>
+                        <button type="button" className="btn btn-small btn-danger" data-testid={`button-confirm-decline-${c.id}`} disabled={busyId === c.id} onClick={() => void review(c.id, 'decline', declineNote)}>Yes, decline</button>
                       </div>
                     ) : (
                       <div className="admin-actions">
-                        <button type="button" className="btn btn-small" data-testid={`button-decline-${c.id}`} disabled={busyId === c.id} onClick={() => setConfirmDecline(c.id)}><X size={14} /> Decline</button>
+                        <button type="button" className="btn btn-small" data-testid={`button-decline-${c.id}`} disabled={busyId === c.id} onClick={() => { setConfirmDecline(c.id); setDeclineNote(''); }}><X size={14} /> Decline</button>
                         <button type="button" className="btn btn-small btn-primary" data-testid={`button-approve-${c.id}`} disabled={busyId === c.id} onClick={() => void review(c.id, 'approve')}><Check size={14} /> Approve</button>
                       </div>
                     ))}
@@ -374,11 +451,106 @@ export function AdminPage() {
         </>
       )}
 
+      {!loading && !error && tab === 'disputes' && (
+        <>
+          <div className="admin-note">
+            <Scale size={18} aria-hidden="true" />
+            <p>The money for a disputed task is already on hold. Read both sides, then decide: release it to the worker, refund the publisher, or split it. Aim to decide within 3 business days.</p>
+          </div>
+          <div className="chips admin-filter" role="group" aria-label="Filter disputes">
+            {(['open', 'resolved'] as const).map((f) => <button key={f} type="button" className={`chip ${disputeFilter === f ? 'on' : ''}`} aria-pressed={disputeFilter === f} data-testid={`chip-dispute-${f}`} onClick={() => { setOpenDispute(null); setDisputeFilter(f); }}>{f === 'open' ? 'Open' : 'Decided'}</button>)}
+          </div>
+          {disputes.length === 0 ? (
+            <div className="empty-state"><Scale size={26} /><h2>Nothing here</h2><p>{disputeFilter === 'open' ? 'No disputes are waiting for a decision.' : 'No disputes have been decided yet.'}</p></div>
+          ) : (
+            <section className="surface">
+              {disputes.map((d) => (
+                <div className="admin-reset" key={d.id} data-testid={`admin-dispute-${d.id}`}>
+                  <div className="admin-row">
+                    <div className="admin-person"><span className="avatar" aria-hidden="true">{initials(d.title)}</span><span><strong>{d.title}</strong><small>{d.workerName} (worker) vs {d.publisherName} (publisher) · {gh(d.reward)}</small></span></div>
+                    <div className="admin-row-meta"><span>Opened by {d.openedByName}</span><span>{d.messages} {d.messages === 1 ? 'message' : 'messages'}</span><span>{timeAgo(d.createdAt)}</span></div>
+                    <div className="admin-actions"><button type="button" className="btn btn-small btn-primary" data-testid={`button-view-dispute-${d.id}`} onClick={() => void showDispute(d.id)}>{openDispute === d.id ? 'Close' : d.status === 'open' ? 'Review' : 'View'}</button></div>
+                  </div>
+                  {openDispute === d.id && (
+                    <div className="admin-linkbox" data-testid={`dispute-detail-${d.id}`}>
+                      {!disputeDetail ? <p className="wallet-help">Loading…</p> : (
+                        <>
+                          <p className="wallet-help" style={{ marginTop: 0 }}><strong>Reason:</strong> {disputeDetail.dispute.reason}</p>
+                          <p className="wallet-help"><strong>The brief:</strong> {disputeDetail.dispute.description}</p>
+                          <p className="wallet-help"><strong>Deliverable:</strong> {disputeDetail.dispute.deliverable} · <strong>Judged on:</strong> {disputeDetail.dispute.criteria}</p>
+                          {disputeDetail.dispute.correctionReason && <p className="wallet-help"><strong>Correction asked for:</strong> {disputeDetail.dispute.correctionReason}</p>}
+                          {disputeDetail.submissions.map((x) => <p className="wallet-help" key={x.round}><strong>{x.round === 1 ? 'Submission' : 'Corrected submission'}:</strong> {x.link ? <a href={x.link} target="_blank" rel="noopener noreferrer nofollow">{x.link}</a> : null} {x.note}</p>)}
+                          {disputeDetail.messages.length > 0 && <div className="dispute-thread">{disputeDetail.messages.map((m, i) => <div key={i} className="bubble"><strong>{m.name}</strong><p>{m.body}</p><small>{formatWhen(m.createdAt)}</small></div>)}</div>}
+                          {d.status === 'open' ? (
+                            <div className="admin-resolve">
+                              <div className="network-pick" role="radiogroup" aria-label="Decision">
+                                {[['release', 'Pay the worker'], ['refund', 'Refund the publisher'], ['split', 'Split']].map(([value, label]) => (
+                                  <button key={value} type="button" role="radio" aria-checked={resolve.decision === value} className={`network${resolve.decision === value ? ' on mtn' : ''}`} data-testid={`decision-${value}`} onClick={() => setResolve({ ...resolve, decision: value })}>{label}</button>
+                                ))}
+                              </div>
+                              {resolve.decision === 'split' && <><label htmlFor="split-amount" className="auth-label">Worker's share (GH₵), less than {gh(d.reward)}</label><input id="split-amount" className="field" data-testid="input-split-amount" inputMode="decimal" value={resolve.amount} onChange={(e) => setResolve({ ...resolve, amount: e.target.value })} /></>}
+                              <label htmlFor="resolve-note" className="auth-label">Explanation for both sides (required)</label>
+                              <textarea id="resolve-note" className="field" data-testid="input-resolve-note" rows={3} value={resolve.note} onChange={(e) => setResolve({ ...resolve, note: e.target.value })} maxLength={500} />
+                              <button type="button" className="btn btn-primary" data-testid="button-resolve-dispute" style={{ marginTop: 12 }} disabled={busyId === d.id || resolve.note.trim().length < 3} onClick={() => void decideDispute(d)}>Save decision</button>
+                            </div>
+                          ) : <p className="wallet-help"><strong>Decision:</strong> {disputeDetail.dispute.decision} · {disputeDetail.dispute.adminNote}</p>}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
+        </>
+      )}
+
       {!loading && !error && tab === 'payouts' && (
         <>
           <div className="admin-note">
             <Landmark size={18} aria-hidden="true" />
             <p>Withdrawals are paid on Tuesdays and Fridays. Send each one by mobile money, then mark it paid. A rejected withdrawal goes straight back to the member’s wallet.</p>
+          </div>
+
+          <h2 className="admin-h">Deposits to confirm</h2>
+          {deposits.length === 0 ? (
+            <p className="wallet-empty">No deposits are waiting. Check your mobile money account, then confirm each one here.</p>
+          ) : (
+            <section className="surface" data-testid="admin-deposits">
+              {deposits.map((d) => (
+                <div className="admin-reset" key={d.id} data-testid={`admin-deposit-${d.id}`}>
+                  <div className="admin-row">
+                    <div className="admin-person">
+                      <span className="avatar" aria-hidden="true">{initials(d.name)}</span>
+                      <span><strong>{gh(d.amount)} · {d.name}</strong><small>{d.email}</small></span>
+                    </div>
+                    <div className="admin-row-meta"><span>Reference: {d.reference}</span><span>{timeAgo(d.createdAt)}</span></div>
+                    <div className="admin-actions">
+                      <button type="button" className="btn btn-small" data-testid={`button-dep-reject-${d.id}`} disabled={busyId === d.id} onClick={() => { setDepPanel({ id: d.id, mode: 'reject' }); setDepNote(''); }}>Reject</button>
+                      <button type="button" className="btn btn-small btn-primary" data-testid={`button-dep-confirm-${d.id}`} disabled={busyId === d.id} onClick={() => void settleDeposit(d, 'confirm')}>Confirm {gh(d.amount)} received</button>
+                    </div>
+                  </div>
+                  {depPanel?.id === d.id && (
+                    <div className="admin-linkbox">
+                      <label htmlFor={`dep-note-${d.id}`}>Reason for the member (required)</label>
+                      <div className="admin-linkrow">
+                        <input id={`dep-note-${d.id}`} className="field" data-testid={`input-dep-note-${d.id}`} value={depNote} onChange={(e) => setDepNote(e.target.value)} placeholder="e.g. We did not receive this payment" />
+                        <button type="button" className="btn btn-small btn-danger" data-testid={`button-dep-confirm-reject-${d.id}`} disabled={busyId === d.id} onClick={() => void settleDeposit(d, 'reject')}>Confirm reject</button>
+                        <button type="button" className="btn btn-small" onClick={() => setDepPanel(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
+
+          <h2 className="admin-h">Payment instructions for members</h2>
+          <div className="surface admin-credit">
+            <p className="wallet-help">This text is shown to members in their wallet under “Add funds”. Include your mobile money number and what to use as the reference.</p>
+            <textarea className="field" data-testid="input-deposit-instructions" rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} maxLength={800} placeholder="e.g. Send to MoMo 0244 000 000 (HUSTLA). Use your email as the reference." />
+            <button type="button" className="btn btn-primary" data-testid="button-save-instructions" style={{ marginTop: 12 }} onClick={() => void saveInstructions()}>Save instructions</button>
+            {summary && <p className="wallet-help" style={{ marginTop: 14 }} data-testid="admin-fees">HUSTLA fees earned so far: <strong>{gh(summary.fees)}</strong></p>}
           </div>
 
           <h2 className="admin-h">Withdrawal requests</h2>
